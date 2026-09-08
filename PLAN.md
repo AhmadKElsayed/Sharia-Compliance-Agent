@@ -39,6 +39,48 @@ and the absence of an embeddings endpoint. Both constraints are now gone:
 - Embeddings come from the same key. No local model, no `torch`, no `onnxruntime`, and no
   second provider account.
 
+### Reasoning calibration
+
+The chat model is a reasoning model, and how much it is allowed to reason turned
+out to change *correctness*, not just latency. Benchmarked over four queries —
+two with obvious answers, two where the corpus says "refer for review" rather
+than yes or no:
+
+| Effort | Verdicts correct | Latency | Completion tokens |
+|---|---|---|---|
+| off | 4 / 4 | 8–12s | 850–1,500 |
+| **low** | **4 / 4** | 16–30s | 2,000–5,600 |
+| high | **3 / 4** | 28–71s | 4,900–13,600 |
+
+`high` is not a safer setting, it is a worse one. On a Mudarabah account that is
+genuinely compliant it invented two CONDITIONAL findings — "loss allocation",
+"profit realisation timing" — about details the query never raised, which
+downgraded a correct COMPLIANT to NEEDS_REVIEW. The same over-flagging appeared
+on the SOFR query, where it raised four UNRESOLVED findings about unstated asset
+details, disclosure, and late-payment terms.
+
+That failure mode is specifically damaging here. The verdict rules already
+resolve ambiguity toward NEEDS_REVIEW; a model that manufactures conditions on
+top of that drives every verdict to NEEDS_REVIEW, at which point the agent tells
+a reviewer nothing.
+
+`low` is the default. It matched `off` on every verdict while producing better
+output: it mapped the benchmark-pricing clause to UNRESOLVED rather than
+CONDITIONAL, matching the corpus language "referred for review", and it
+consolidated findings that `off` emitted as four restatements of a single issue
+(riba / guaranteed principal / substance over form / lack of risk-sharing).
+
+Two related settings exist because of this. `LLM_MAX_TOKENS` defaults to 12,000:
+at 3,072 the reasoning pass consumed the entire budget (3,072 of 3,072 tokens
+were reasoning) and the call returned empty content. `OPENROUTER_PROVIDER_SORT`
+defaults to `throughput`: OpenRouter serves this model from 29 providers, and
+default routing picked one running at 15.6 tok/s where throughput-sorted routing
+picked one at 130.3 tok/s.
+
+Caveat on method: one run per cell, four queries. Enough to reject `high`, whose
+failure has a clear structural mechanism, but not a precise quality ranking of
+`low` against `off`.
+
 ### Cost and quota profile
 
 | Item | Where it runs | Cost |

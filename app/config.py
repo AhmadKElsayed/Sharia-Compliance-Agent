@@ -43,13 +43,25 @@ class Settings(BaseSettings):
     # preference and uses OpenRouter's default routing.
     openrouter_provider_sort: str = "throughput"
 
-    # The configured model is a reasoning model. Left enabled, its reasoning
-    # pass consumed the entire max_tokens budget (3072/3072 reasoning tokens,
-    # zero content) and the call returned nothing parseable. Both agent calls
-    # are structured extraction over supplied excerpts, where the reasoning pass
-    # bought nothing: disabling it took the assess call from 16s-to-failure down
-    # to 4.2s with correct output.
-    llm_reasoning_enabled: bool = False
+    # Reasoning effort: "low", "medium", "high", or "" to disable.
+    #
+    # Measured on a four-query benchmark (see PLAN.md "Reasoning calibration").
+    # "low" and off both produced correct verdicts on all four; "high" produced
+    # three of four, downgrading a genuinely compliant Mudarabah by inventing
+    # CONDITIONAL findings about details the query never raised. Given more
+    # budget the model manufactures doubt rather than reasoning more carefully,
+    # which is corrosive here because the verdict rules already bias toward
+    # NEEDS_REVIEW.
+    #
+    # "low" is the default because it matched off on verdicts while mapping
+    # severities better (UNRESOLVED rather than CONDITIONAL for a clause the
+    # corpus says to refer for review) and consolidating redundant findings.
+    llm_reasoning_effort: str = "low"
+
+    # Must comfortably exceed reasoning plus answer. Set too low, the reasoning
+    # pass consumes the entire budget and the call returns empty content: 3072
+    # of 3072 tokens were reasoning tokens before this was raised.
+    llm_max_tokens: int = 12000
 
     # --- Qdrant ------------------------------------------------------------
     qdrant_url: str = ""
@@ -65,6 +77,17 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_prompts: bool = True
     log_file: str = "logs/app.jsonl"
+
+    @field_validator("llm_reasoning_effort")
+    @classmethod
+    def _validate_effort(cls, value: str) -> str:
+        allowed = {"", "low", "medium", "high"}
+        lowered = value.strip().lower()
+        if lowered not in allowed:
+            raise ValueError(
+                f"llm_reasoning_effort must be one of {sorted(allowed)}, got {value!r}"
+            )
+        return lowered
 
     @field_validator("log_level")
     @classmethod

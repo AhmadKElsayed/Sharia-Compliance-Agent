@@ -167,3 +167,49 @@ def test_client_requires_key_and_models() -> None:
         LLMClient(api_key="", models=["m"])
     with pytest.raises(ValueError, match="at least one model"):
         LLMClient(api_key="k", models=[])
+
+
+# --- reasoning and provider routing --------------------------------------
+
+
+class _CapturingCompletions(_StubCompletions):
+    def __init__(self) -> None:
+        super().__init__(['{"ok": true}'])
+        self.kwargs: dict = {}
+
+    def create(self, **kwargs):  # noqa: ANN003, ANN201
+        self.kwargs = kwargs
+        return super().create(**kwargs)
+
+
+def _capturing(**client_kw) -> tuple[LLMClient, _CapturingCompletions]:
+    client = LLMClient(api_key="k", models=["m"], **client_kw)
+    stub = _CapturingCompletions()
+    client._client = SimpleNamespace(chat=SimpleNamespace(completions=stub))  # noqa: SLF001
+    return client, stub
+
+
+def test_reasoning_effort_is_sent() -> None:
+    client, stub = _capturing(reasoning_effort="low")
+    client.complete_json("s", "u")
+    assert stub.kwargs["extra_body"]["reasoning"] == {"effort": "low"}
+
+
+def test_empty_effort_disables_reasoning_explicitly() -> None:
+    """Explicit disable, not omission: the provider default is what caused
+    a reasoning pass to consume the entire token budget."""
+    client, stub = _capturing(reasoning_effort="")
+    client.complete_json("s", "u")
+    assert stub.kwargs["extra_body"]["reasoning"] == {"enabled": False}
+
+
+def test_provider_sort_is_sent() -> None:
+    client, stub = _capturing(provider_sort="throughput")
+    client.complete_json("s", "u")
+    assert stub.kwargs["extra_body"]["provider"] == {"sort": "throughput"}
+
+
+def test_max_tokens_is_forwarded() -> None:
+    client, stub = _capturing()
+    client.complete_json("s", "u", max_tokens=12000)
+    assert stub.kwargs["max_tokens"] == 12000

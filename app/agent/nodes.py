@@ -50,12 +50,16 @@ class AgentDeps:
         store: VectorStore,
         top_k: int = 5,
         score_threshold: float = 0.35,
+        max_tokens: int = 12000,
     ) -> None:
         self.llm = llm
         self.embedder = embedder
         self.store = store
         self.top_k = top_k
         self.score_threshold = score_threshold
+        # Shared budget for both calls. It must cover the reasoning pass as well
+        # as the answer; too small and the model returns empty content.
+        self.max_tokens = max_tokens
 
 
 def _record_call(state: AgentState, node: str, response: Any) -> None:
@@ -81,7 +85,7 @@ def parse_query(state: AgentState, deps: AgentDeps) -> AgentState:
 
     try:
         parsed, response = deps.llm.complete_json(
-            PARSE_SYSTEM, render_parse_user(state["query"]), max_tokens=1024
+            PARSE_SYSTEM, render_parse_user(state["query"]), max_tokens=deps.max_tokens
         )
         _record_call(state, "parse_query", response)
     except LLMError as exc:
@@ -274,7 +278,9 @@ def assess(state: AgentState, deps: AgentDeps) -> AgentState:
     )
 
     try:
-        parsed, response = deps.llm.complete_json(ASSESS_SYSTEM, user, max_tokens=3072)
+        parsed, response = deps.llm.complete_json(
+            ASSESS_SYSTEM, user, max_tokens=deps.max_tokens
+        )
         _record_call(state, "assess", response)
     except LLMError as exc:
         _error(state, f"assess failed: {exc}")

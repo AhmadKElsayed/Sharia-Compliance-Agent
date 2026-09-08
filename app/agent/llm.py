@@ -133,7 +133,7 @@ class LLMClient:
         max_retries: int = 2,
         temperature: float = 0.0,
         provider_sort: str = "throughput",
-        reasoning_enabled: bool = False,
+        reasoning_effort: str = "low",
     ) -> None:
         if not api_key:
             raise ValueError("OPENROUTER_API_KEY is required")
@@ -142,7 +142,7 @@ class LLMClient:
         self._models = models
         self._temperature = temperature
         self._provider_sort = provider_sort
-        self._reasoning_enabled = reasoning_enabled
+        self._reasoning_effort = reasoning_effort
         self._client = OpenAI(
             api_key=api_key,
             base_url=base_url,
@@ -188,10 +188,14 @@ class LLMClient:
                     # cheapest rather than fastest. On this model that is the
                     # difference between a 2 second and a 30 second call.
                     extra["provider"] = {"sort": self._provider_sort}
-                if not self._reasoning_enabled:
-                    # A reasoning pass can consume the whole max_tokens budget
-                    # and leave no content at all. See config.llm_reasoning_enabled.
-                    extra["reasoning"] = {"enabled": False}
+                # An empty effort disables reasoning entirely. Either way the
+                # flag is explicit, because leaving it to the provider default
+                # is what let a reasoning pass eat the whole token budget.
+                extra["reasoning"] = (
+                    {"effort": self._reasoning_effort}
+                    if self._reasoning_effort
+                    else {"enabled": False}
+                )
                 if extra:
                     kwargs["extra_body"] = extra
 
