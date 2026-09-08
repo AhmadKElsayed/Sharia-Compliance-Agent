@@ -10,30 +10,28 @@ from pathlib import Path
 
 import pytest
 
-from app.rag.chunking import (
-    MAX_WORDS,
-    Chunk,
-    chunk_corpus,
-    chunk_document,
-    load_corpus,
-    parse_document,
-)
+from app.rag.chunking import MAX_WORDS, Chunk, chunk_document, chunk_documents, parse_document
+from app.rag.pdf_loader import load_pdf, load_pdf_corpus
 
-CORPUS_DIR = Path(__file__).resolve().parents[1] / "corpus"
+CORPUS_DIR = Path(__file__).resolve().parents[1] / "corpus" / "demo"
 
 
 @pytest.fixture(scope="module")
 def chunks() -> list[Chunk]:
-    return chunk_corpus(CORPUS_DIR)
+    return chunk_documents(load_pdf_corpus(CORPUS_DIR))
 
 
 def test_corpus_loads_and_every_doc_declares_provenance() -> None:
-    docs = load_corpus(CORPUS_DIR)
+    docs = load_pdf_corpus(CORPUS_DIR)
     assert len(docs) >= 5, "task requires 3-5+ documents"
     for doc in docs:
         assert doc.doc_id.startswith("SFS-")
-        assert "SYNTHESIZED FOR DEMONSTRATION" in doc.provenance, (
-            f"{doc.doc_id} must declare that it is not authentic AAOIFI text"
+        assert "internal guidance" in doc.provenance.lower(), (
+            f"{doc.doc_id} must identify itself as internal guidance"
+        )
+        assert "no authority" in doc.provenance.lower(), (
+            f"{doc.doc_id} must disclaim authority, so the agent never presents "
+            f"it as an external standard's ruling"
         )
 
 
@@ -56,7 +54,7 @@ def test_point_ids_are_unique_and_deterministic(chunks: list[Chunk]) -> None:
     point_ids = [c.point_id() for c in chunks]
     assert len(point_ids) == len(set(point_ids))
     # Re-chunking must yield identical IDs, or ingestion stops being idempotent.
-    again = {c.chunk_id: c.point_id() for c in chunk_corpus(CORPUS_DIR)}
+    again = {c.chunk_id: c.point_id() for c in chunk_documents(load_pdf_corpus(CORPUS_DIR))}
     assert again == {c.chunk_id: c.point_id() for c in chunks}
 
 
@@ -108,7 +106,7 @@ def test_known_clause_survives_chunking_verbatim(chunks: list[Chunk]) -> None:
     """The riba clause the agent leans on most must be retrievable intact."""
     hits = [c for c in chunks if c.doc_id == "SFS-001" and "3.2" in c.sections]
     assert len(hits) == 1
-    assert "guarantee of the principal" in hits[0].text
+    assert "capital guarantee" in hits[0].text
 
 
 def test_document_with_no_clauses_yields_no_chunks(tmp_path: Path) -> None:

@@ -17,8 +17,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.config import get_settings  # noqa: E402
-from app.rag.chunking import chunk_corpus  # noqa: E402
-from app.rag.ingest import CORPUS_DIR, build_embedder, build_store, ingest  # noqa: E402
+from app.rag.ingest import (  # noqa: E402
+    CORPUS_DIR,
+    build_embedder,
+    build_store,
+    ingest,
+    load_chunks,
+)
 
 
 def main() -> int:
@@ -39,16 +44,17 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.dry_run:
-        chunks = chunk_corpus(args.corpus)
-        docs = sorted({c.doc_id for c in chunks})
+        chunks, source, doc_count = load_chunks(args.corpus)
         words = [len(c.text.split()) for c in chunks]
         print(f"corpus     : {args.corpus}")
-        print(f"documents  : {len(docs)} ({', '.join(docs)})")
+        print(f"source     : {source}")
+        print(f"documents  : {doc_count}")
         print(f"chunks     : {len(chunks)}")
         print(f"words/chunk: min {min(words)} median {sorted(words)[len(words)//2]} max {max(words)}")
         print("\nfirst five citations:")
         for chunk in chunks[:5]:
-            print(f"  {chunk.citation:24s} {chunk.text[:70]}...")
+            print(f"  {chunk.citation}")
+            print(f"      {chunk.text[:88]}...")
         return 0
 
     settings = get_settings()

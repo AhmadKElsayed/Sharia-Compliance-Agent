@@ -32,8 +32,8 @@ class Settings(BaseSettings):
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_model: str = "anthropic/claude-sonnet-4.5"
     openrouter_fallback_models: str = ""
-    openrouter_embedding_model: str = "openai/text-embedding-3-small"
-    embedding_dim: int = 1536
+    openrouter_embedding_model: str = "openai/text-embedding-3-large"
+    embedding_dim: int = 3072
     llm_timeout_seconds: float = 60.0
     llm_max_retries: int = 2
 
@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     # --- Qdrant ------------------------------------------------------------
     qdrant_url: str = ""
     qdrant_api_key: str = ""
-    qdrant_collection: str = "sharia_corpus"
+    qdrant_collection: str = "aaoifi_ss_en"
     qdrant_timeout_seconds: float = 20.0
 
     # --- Retrieval ---------------------------------------------------------

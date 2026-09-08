@@ -1,0 +1,7 @@
+-r requirements.txt
+
+# Ingest-only dependencies. PyMuPDF is AGPL; it is used solely by the offline
+# extractor and is never imported by the deployed API, so it stays out of the
+# runtime image.
+pymupdf==1.28.2
+reportlab==5.0.1

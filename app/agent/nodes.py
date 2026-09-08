@@ -268,6 +268,7 @@ def assess(state: AgentState, deps: AgentDeps) -> AgentState:
         state["findings"] = []
         state["summary"] = ""
         state["recommended_actions"] = []
+        state["open_questions"] = []
         return state
 
     user = render_assess_user(
@@ -287,6 +288,7 @@ def assess(state: AgentState, deps: AgentDeps) -> AgentState:
         state["findings"] = []
         state["summary"] = ""
         state["recommended_actions"] = []
+        state["open_questions"] = []
         return state
 
     state["findings"] = _parse_findings(parsed.get("findings"), hits)
@@ -295,6 +297,11 @@ def assess(state: AgentState, deps: AgentDeps) -> AgentState:
         str(a).strip()
         for a in parsed.get("recommended_actions", []) or []
         if str(a).strip()
+    ]
+    state["open_questions"] = [
+        str(q).strip()
+        for q in parsed.get("open_questions", []) or []
+        if str(q).strip()
     ]
     return state
 

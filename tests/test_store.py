@@ -11,11 +11,12 @@ from pathlib import Path
 
 import pytest
 
-from app.rag.chunking import chunk_corpus
+from app.rag.chunking import chunk_documents
+from app.rag.pdf_loader import load_pdf_corpus
 from app.rag.embedder import Embedder, HashingEmbedder, OpenRouterEmbedder
 from app.rag.store import InMemoryStore, QdrantStore, SearchHit, VectorStore
 
-CORPUS_DIR = Path(__file__).resolve().parents[1] / "corpus"
+CORPUS_DIR = Path(__file__).resolve().parents[1] / "corpus" / "demo"
 
 
 @pytest.fixture(scope="module")
@@ -27,7 +28,7 @@ def embedder() -> HashingEmbedder:
 def populated(embedder: HashingEmbedder) -> InMemoryStore:
     store = InMemoryStore()
     store.ensure_collection(embedder.dim)
-    chunks = chunk_corpus(CORPUS_DIR)
+    chunks = chunk_documents(load_pdf_corpus(CORPUS_DIR))
     store.upsert(chunks, embedder.embed_documents([c.embedding_text() for c in chunks]))
     return store
 
@@ -89,18 +90,18 @@ def test_openrouter_embedder_rejects_missing_key() -> None:
 
 
 def test_upsert_stores_every_chunk(populated: InMemoryStore) -> None:
-    assert populated.count() == len(chunk_corpus(CORPUS_DIR))
+    assert populated.count() == len(chunk_documents(load_pdf_corpus(CORPUS_DIR)))
 
 
 def test_upsert_is_idempotent(embedder: HashingEmbedder, populated: InMemoryStore) -> None:
     before = populated.count()
-    chunks = chunk_corpus(CORPUS_DIR)
+    chunks = chunk_documents(load_pdf_corpus(CORPUS_DIR))
     populated.upsert(chunks, embedder.embed_documents([c.embedding_text() for c in chunks]))
     assert populated.count() == before, "re-ingesting must not duplicate points"
 
 
 def test_upsert_rejects_mismatched_counts(populated: InMemoryStore) -> None:
-    chunks = chunk_corpus(CORPUS_DIR)
+    chunks = chunk_documents(load_pdf_corpus(CORPUS_DIR))
     with pytest.raises(ValueError, match="mismatch"):
         populated.upsert(chunks, [[0.0] * 256])
 

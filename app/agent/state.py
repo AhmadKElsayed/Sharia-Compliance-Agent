@@ -39,6 +39,11 @@ class AgentState(TypedDict, total=False):
     findings: list[Finding]
     summary: str
     recommended_actions: list[str]
+    # Information the proposal does not mention. Surfaced to the reviewer but
+    # deliberately excluded from the verdict: a short proposal is silent on many
+    # details, and letting each one force NEEDS_REVIEW makes every verdict
+    # NEEDS_REVIEW.
+    open_questions: list[str]
 
     # verify_citations
     rejected_citations: list[str]

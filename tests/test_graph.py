@@ -17,11 +17,12 @@ from app.agent.graph import build_graph, initial_state
 from app.agent.llm import LLMClient
 from app.agent.nodes import AgentDeps
 from app.agent.verdict import Verdict
-from app.rag.chunking import chunk_corpus
+from app.rag.chunking import chunk_documents
+from app.rag.pdf_loader import load_pdf_corpus
 from app.rag.embedder import HashingEmbedder
 from app.rag.store import InMemoryStore
 
-CORPUS_DIR = Path(__file__).resolve().parents[1] / "corpus"
+CORPUS_DIR = Path(__file__).resolve().parents[1] / "corpus" / "demo"
 
 
 class ScriptedLLM(LLMClient):
@@ -50,7 +51,7 @@ def store_and_embedder() -> tuple[InMemoryStore, HashingEmbedder]:
     embedder = HashingEmbedder(dim=256)
     store = InMemoryStore()
     store.ensure_collection(embedder.dim)
-    chunks = chunk_corpus(CORPUS_DIR)
+    chunks = chunk_documents(load_pdf_corpus(CORPUS_DIR))
     store.upsert(chunks, embedder.embed_documents([c.embedding_text() for c in chunks]))
     return store, embedder
 
@@ -86,16 +87,31 @@ def assess_payload(chunk_id: str, severity: str = "PROHIBITED") -> dict:
     }
 
 
-def run(deps, query: str = "Can Mal offer a fixed-return savings account?"):
+QUERY = "Can Mal offer a fixed-return savings account?"
+
+
+def run(deps, query: str = QUERY):
     return build_graph(deps).invoke(initial_state(query, "trace-1"))
+
+
+def retrieved_chunk_id(store_and_embedder, query: str = QUERY) -> str:
+    """A chunk id the retriever will actually return for this query.
+
+    Picking an arbitrary stored chunk instead would be a latent bug: outside
+    top-k it gets stripped by the citation gate and the verdict silently
+    downgrades, which is exactly what the safety tests are meant to detect.
+    """
+    store, embedder = store_and_embedder
+    hits = store.search(embedder.embed_query(query), top_k=5)
+    assert hits, "fixture corpus produced no hits"
+    return hits[0].chunk_id
 
 
 # --- happy path ----------------------------------------------------------
 
 
 def test_full_path_produces_non_compliant(store_and_embedder) -> None:
-    store, _ = store_and_embedder
-    real_id = next(iter(store._points.values()))[1]["chunk_id"]  # noqa: SLF001
+    real_id = retrieved_chunk_id(store_and_embedder)
     deps, llm = make_deps(
         [parse_payload(), assess_payload(real_id)], store_and_embedder
     )
@@ -115,8 +131,7 @@ def test_full_path_produces_non_compliant(store_and_embedder) -> None:
 
 
 def test_permissible_findings_yield_compliant(store_and_embedder) -> None:
-    store, _ = store_and_embedder
-    real_id = next(iter(store._points.values()))[1]["chunk_id"]  # noqa: SLF001
+    real_id = retrieved_chunk_id(store_and_embedder)
     deps, _ = make_deps(
         [parse_payload(), assess_payload(real_id, "PERMISSIBLE")], store_and_embedder
     )
@@ -138,8 +153,7 @@ def test_out_of_scope_skips_assessment(store_and_embedder) -> None:
 
 def test_weak_retrieval_triggers_one_broadened_retry(store_and_embedder) -> None:
     """An unreachable threshold must cause exactly one retry, then proceed."""
-    store, _ = store_and_embedder
-    real_id = next(iter(store._points.values()))[1]["chunk_id"]  # noqa: SLF001
+    real_id = retrieved_chunk_id(store_and_embedder)
     deps, _ = make_deps(
         [parse_payload(), assess_payload(real_id)], store_and_embedder, threshold=1.1
     )
@@ -154,8 +168,7 @@ def test_weak_retrieval_triggers_one_broadened_retry(store_and_embedder) -> None
 
 
 def test_broadened_queries_differ_from_first_round(store_and_embedder) -> None:
-    store, _ = store_and_embedder
-    real_id = next(iter(store._points.values()))[1]["chunk_id"]  # noqa: SLF001
+    real_id = retrieved_chunk_id(store_and_embedder)
     deps, _ = make_deps(
         [parse_payload(), assess_payload(real_id)], store_and_embedder, threshold=1.1
     )
@@ -201,8 +214,7 @@ def test_empty_findings_do_not_yield_compliant(store_and_embedder) -> None:
 
 
 def test_unknown_severity_degrades_to_unresolved(store_and_embedder) -> None:
-    store, _ = store_and_embedder
-    real_id = next(iter(store._points.values()))[1]["chunk_id"]  # noqa: SLF001
+    real_id = retrieved_chunk_id(store_and_embedder)
     deps, _ = make_deps(
         [parse_payload(), assess_payload(real_id, "SOMEWHAT_DUBIOUS")],
         store_and_embedder,

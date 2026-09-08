@@ -16,6 +16,10 @@ from qdrant_client.http import models as qmodels
 
 from app.rag.chunking import Chunk
 
+# Points per upsert request. Large vectors make a whole-corpus upsert exceed
+# what the managed endpoint accepts.
+UPSERT_BATCH = 128
+
 
 @dataclass(frozen=True)
 class SearchHit:
@@ -34,6 +38,7 @@ class SearchHit:
     section_label: str
     citation: str
     text: str
+    breadcrumb: str = ""
 
     def to_log(self) -> dict[str, Any]:
         """Compact form for structured logs."""
@@ -55,6 +60,8 @@ def _payload(chunk: Chunk) -> dict[str, Any]:
         "section_label": chunk.section_label,
         "citation": chunk.citation,
         "text": chunk.text,
+        "breadcrumb": chunk.breadcrumb,
+        "lang": chunk.lang,
     }
 
 
@@ -68,6 +75,7 @@ def _hit(payload: dict[str, Any], score: float) -> SearchHit:
         section_label=payload.get("section_label", ""),
         citation=payload.get("citation", ""),
         text=payload.get("text", ""),
+        breadcrumb=payload.get("breadcrumb", ""),
     )
 
 
@@ -160,7 +168,16 @@ class QdrantStore:
             )
             for chunk, vector in zip(chunks, vectors, strict=True)
         ]
-        self._client.upsert(collection_name=self._collection, points=points, wait=True)
+
+        # Upserted in batches: the full corpus at 3072 dimensions is roughly
+        # 24 MB in one request, and the managed endpoint closes the connection
+        # rather than returning an error.
+        for start in range(0, len(points), UPSERT_BATCH):
+            self._client.upsert(
+                collection_name=self._collection,
+                points=points[start : start + UPSERT_BATCH],
+                wait=True,
+            )
         return len(points)
 
     def search(

@@ -1,3 +1,11 @@
+# Licensed source documents — NEVER commit.
+# The AAOIFI Shari'ah Standards are a commercially sold, copyrighted
+# publication. Ingesting them locally is fine; redistributing them through a
+# public repository is not. The vectors live in Qdrant, not in git.
+corpus/pdf/Shariaa-Standards-*.pdf
+corpus/pdf/Shariaah-Standards-*.pdf
+corpus/licensed/
+
 # Secrets — never commit
 .env
 .env.*

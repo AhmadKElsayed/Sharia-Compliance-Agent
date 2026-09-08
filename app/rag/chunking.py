@@ -57,6 +57,17 @@ class Chunk:
     heading: str
     sections: list[str] = field(default_factory=list)
     text: str = ""
+    # Full lineage, e.g. "Shari'ah Standard No.(8) Murabahah > 2. Procedures >
+    # 2/1 ... > clause 2/1/1". When set it replaces the title+heading prefix,
+    # which is what strategy E (contextual prefix) requires.
+    breadcrumb: str = ""
+    # Language of the clause. Kept in the payload from day one so an Arabic
+    # edition becomes a filter rather than a re-ingest: AAOIFI clause numbering
+    # is identical across editions, so the same id addresses both.
+    lang: str = "en"
+    # A human-readable citation when the generic "doc §section" form is not what
+    # a reviewer would look up. Baked into the payload at ingest time.
+    citation_override: str = ""
 
     @property
     def section_label(self) -> str:
@@ -70,6 +81,8 @@ class Chunk:
     @property
     def citation(self) -> str:
         """Citation string a reviewer can look up, e.g. ``SFS-001 §3.1-3.3``."""
+        if self.citation_override:
+            return self.citation_override
         label = self.section_label
         return f"{self.doc_id} §{label}" if label else self.doc_id
 
@@ -85,11 +98,13 @@ class Chunk:
     def embedding_text(self) -> str:
         """Text sent to the embedding model.
 
-        The document title and section heading are prepended so that a chunk
-        carries its own context. Without them a clause like "This holds
-        regardless of whether the return is described as interest" embeds almost
-        identically across documents.
+        A chunk must carry its own context. Standards clauses are elliptical --
+        "It is permissible for the Institution to decline" is near-identical to
+        dozens of others until its lineage is attached -- so a breadcrumb is
+        prepended when one is available, falling back to title and heading.
         """
+        if self.breadcrumb:
+            return f"{self.breadcrumb}\n\n{self.text}"
         prefix = f"{self.title} — {self.heading}" if self.heading else self.title
         return f"{prefix}\n\n{self.text}"
 
@@ -206,9 +221,14 @@ def load_corpus(corpus_dir: Path) -> list[Document]:
     return [parse_document(p) for p in paths]
 
 
-def chunk_corpus(corpus_dir: Path) -> list[Chunk]:
-    """Load and chunk the whole corpus."""
+def chunk_documents(docs: list[Document]) -> list[Chunk]:
+    """Chunk a list of already-loaded documents."""
     chunks: list[Chunk] = []
-    for doc in load_corpus(corpus_dir):
+    for doc in docs:
         chunks.extend(chunk_document(doc))
     return chunks
+
+
+def chunk_corpus(corpus_dir: Path) -> list[Chunk]:
+    """Load and chunk a directory of markdown sources."""
+    return chunk_documents(load_corpus(corpus_dir))

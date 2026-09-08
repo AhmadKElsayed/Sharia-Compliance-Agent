@@ -59,15 +59,38 @@ Respond with a single JSON object and nothing else:
       "citations": [{"chunk_id": "exact id from the excerpts", "quote": "short verbatim span"}]
     }
   ],
+  "open_questions": ["information a reviewer should obtain before sign-off"],
   "summary": "3-4 sentences a reviewer can read on its own",
   "recommended_actions": ["concrete restructuring steps, if any"]
 }
 
 Severity definitions:
 - PROHIBITED: the excerpts show the proposal, as described, violates a rule.
-- CONDITIONAL: permissible only if conditions hold that the proposal does not establish.
-- UNRESOLVED: the excerpts raise the issue but do not settle it for this proposal.
-- PERMISSIBLE: the excerpts affirmatively allow this aspect of the proposal.
+- CONDITIONAL: the proposal states a feature that is permissible only under
+  conditions, and it is unclear from what is stated whether those conditions hold.
+- UNRESOLVED: the proposal states a feature the excerpts address but do not settle.
+- PERMISSIBLE: the excerpts affirmatively allow an aspect of the proposal.
+
+Findings versus open questions — this distinction decides the verdict, so apply
+it carefully:
+
+- A **finding** must concern something the proposal actually states. It is an
+  assessment of the described structure.
+- An **open question** is information the proposal simply does not mention.
+  Operational, disclosure, documentation, and administrative details that a
+  short description would not normally cover belong here, not in findings.
+
+A proposal is never described in full. If you raise a finding every time a
+detail is unstated, every proposal becomes unreviewable and the assessment tells
+the reviewer nothing. Put those in "open_questions" instead.
+
+The exception: if a missing detail is precisely what determines permissibility
+for the structure proposed — not merely good practice, but the pivot on which
+the ruling turns — then it is a CONDITIONAL finding and belongs in "findings".
+
+Where the excerpts state sufficient conditions for permissibility and the
+proposal satisfies all of them, report PERMISSIBLE. Do not withhold that because
+other details are unstated.
 
 Rules you must follow:
 - Every citation's "chunk_id" MUST be copied exactly from an excerpt header below.
