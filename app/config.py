@@ -75,6 +75,16 @@ class Settings(BaseSettings):
 
     # --- Observability -----------------------------------------------------
     log_level: str = "INFO"
+
+    # Log the fully resolved LLM prompt and the raw completion.
+    #
+    # On by default because an assessment must be reproducible from its trace:
+    # without the exact prompt, a wrong verdict cannot be attributed to
+    # retrieval, to the prompt, or to the model.
+    #
+    # Turn this OFF in production. A compliance query can carry client names,
+    # deal terms, or material non-public information, and this writes it to
+    # stdout and to the log file in plaintext. See DOCUMENTATION.md §5, Risk 3.
     log_prompts: bool = True
     log_file: str = "logs/app.jsonl"
 

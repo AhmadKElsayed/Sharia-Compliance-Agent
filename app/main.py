@@ -63,6 +63,7 @@ def build_dependencies(settings: Settings) -> AgentDeps:
         max_retries=settings.llm_max_retries,
         provider_sort=settings.openrouter_provider_sort,
         reasoning_effort=settings.llm_reasoning_effort,
+        log_prompts=settings.log_prompts,
     )
     return AgentDeps(
         llm=llm,

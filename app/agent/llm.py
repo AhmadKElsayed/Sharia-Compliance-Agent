@@ -14,6 +14,7 @@ correction.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from dataclasses import dataclass, field
@@ -21,8 +22,21 @@ from typing import Any
 
 from openai import OpenAI
 
+log = logging.getLogger("sharia.llm")
+
 # Matches a ```json ... ``` fence, capturing the body.
 FENCE_RE = re.compile(r"```(?:json)?\s*(.+?)\s*```", re.DOTALL | re.IGNORECASE)
+
+# Prompts are logged in full so an assessment can be reproduced exactly, but a
+# single record must not be so large that the formatter drops it wholesale.
+# Clipping the prompt field keeps the surrounding metadata intact.
+MAX_LOGGED_PROMPT_CHARS = 12_000
+
+
+def _clip(text: str, limit: int = MAX_LOGGED_PROMPT_CHARS) -> str:
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}… [clipped, {len(text)} chars total]"
 
 
 class LLMError(RuntimeError):
@@ -134,6 +148,7 @@ class LLMClient:
         temperature: float = 0.0,
         provider_sort: str = "throughput",
         reasoning_effort: str = "low",
+        log_prompts: bool = True,
     ) -> None:
         if not api_key:
             raise ValueError("OPENROUTER_API_KEY is required")
@@ -143,6 +158,7 @@ class LLMClient:
         self._temperature = temperature
         self._provider_sort = provider_sort
         self._reasoning_effort = reasoning_effort
+        self._log_prompts = log_prompts
         self._client = OpenAI(
             api_key=api_key,
             base_url=base_url,
@@ -199,11 +215,39 @@ class LLMClient:
                 if extra:
                     kwargs["extra_body"] = extra
 
+                # The fully resolved prompt is logged before the call, so a
+                # failed request is as reproducible as a successful one.
+                request_event: dict[str, Any] = {
+                    "model": model,
+                    "max_tokens": max_tokens,
+                    "system_chars": len(system),
+                    "user_chars": len(user),
+                    "reasoning_effort": self._reasoning_effort or "disabled",
+                }
+                if self._log_prompts:
+                    request_event["system_prompt"] = _clip(system)
+                    request_event["user_prompt"] = _clip(user)
+                log.info("llm.request", extra=request_event)
+
                 response = self._client.chat.completions.create(**kwargs)
                 choice = response.choices[0]
                 usage = response.usage
 
                 content = choice.message.content or ""
+                latency_ms = int((time.perf_counter() - started) * 1000)
+
+                response_event: dict[str, Any] = {
+                    "model": response.model or model,
+                    "latency_ms": latency_ms,
+                    "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+                    "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
+                    "finish_reason": choice.finish_reason or "",
+                    "content_chars": len(content),
+                }
+                if self._log_prompts:
+                    response_event["content"] = _clip(content)
+                log.info("llm.response", extra=response_event)
+
                 if not content.strip():
                     # Empty content with a length stop is the token-exhaustion
                     # signature. Naming it here beats a downstream JSON error
@@ -217,7 +261,7 @@ class LLMClient:
                 return LLMResponse(
                     content=content,
                     model=response.model or model,
-                    latency_ms=int((time.perf_counter() - started) * 1000),
+                    latency_ms=latency_ms,
                     prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
                     completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
                     finish_reason=choice.finish_reason or "",

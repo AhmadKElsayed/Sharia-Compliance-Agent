@@ -213,3 +213,91 @@ def test_max_tokens_is_forwarded() -> None:
     client, stub = _capturing()
     client.complete_json("s", "u", max_tokens=12000)
     assert stub.kwargs["max_tokens"] == 12000
+
+
+# --- prompt logging ------------------------------------------------------
+
+
+def _events(caplog, name: str) -> list:
+    return [r for r in caplog.records if r.getMessage() == name]
+
+
+def test_prompt_is_logged_in_full(caplog) -> None:
+    """The brief requires logging the prompt sent; a trace without it cannot
+    attribute a wrong verdict to retrieval, prompt, or model."""
+    caplog.set_level("INFO", logger="sharia.llm")
+    client, _ = _capturing(log_prompts=True)
+    client.complete_json("SYSTEM-MARKER", "USER-MARKER")
+
+    req = _events(caplog, "llm.request")
+    assert len(req) == 1
+    assert req[0].system_prompt == "SYSTEM-MARKER"
+    assert req[0].user_prompt == "USER-MARKER"
+    assert req[0].model == "m"
+
+
+def test_response_content_is_logged(caplog) -> None:
+    caplog.set_level("INFO", logger="sharia.llm")
+    client, _ = _capturing(log_prompts=True)
+    client.complete_json("s", "u")
+
+    resp = _events(caplog, "llm.response")
+    assert len(resp) == 1
+    assert resp[0].content == '{"ok": true}'
+    assert resp[0].finish_reason == "stop"
+    assert resp[0].latency_ms >= 0
+
+
+def test_log_prompts_false_omits_text_but_keeps_metadata(caplog) -> None:
+    """Sensitive query text must be suppressible without losing the audit
+    skeleton -- see DOCUMENTATION.md §5, Risk 3."""
+    caplog.set_level("INFO", logger="sharia.llm")
+    client, _ = _capturing(log_prompts=False)
+    client.complete_json("SYSTEM-MARKER", "USER-MARKER")
+
+    req = _events(caplog, "llm.request")[0]
+    resp = _events(caplog, "llm.response")[0]
+
+    assert not hasattr(req, "system_prompt")
+    assert not hasattr(req, "user_prompt")
+    assert not hasattr(resp, "content")
+    # Metadata still present, so the call remains auditable.
+    assert req.system_chars == len("SYSTEM-MARKER")
+    assert req.user_chars == len("USER-MARKER")
+    assert resp.completion_tokens == 5
+
+
+def test_oversized_prompts_are_clipped_not_dropped(caplog) -> None:
+    from app.agent.llm import MAX_LOGGED_PROMPT_CHARS
+
+    caplog.set_level("INFO", logger="sharia.llm")
+    client, _ = _capturing(log_prompts=True)
+    huge = "x" * (MAX_LOGGED_PROMPT_CHARS + 5000)
+    client.complete_json("s", huge)
+
+    logged = _events(caplog, "llm.request")[0].user_prompt
+    assert len(logged) < len(huge)
+    assert "clipped" in logged
+    assert str(len(huge)) in logged
+
+
+def test_request_is_logged_before_the_call_so_failures_are_reproducible(caplog) -> None:
+    caplog.set_level("INFO", logger="sharia.llm")
+    client, _ = _client([RuntimeError("upstream down")], ["model-a"])
+    client._log_prompts = True  # noqa: SLF001
+    with pytest.raises(LLMError):
+        client.complete_json("SYSTEM-MARKER", "USER-MARKER")
+
+    req = _events(caplog, "llm.request")
+    assert len(req) == 1, "a failed call must still record what was sent"
+    assert req[0].user_prompt == "USER-MARKER"
+    assert not _events(caplog, "llm.response")
+
+
+def test_repair_pass_is_logged_separately(caplog) -> None:
+    caplog.set_level("INFO", logger="sharia.llm")
+    client, _ = _client(["not json", '{"fixed": true}'], ["model-a"])
+    client._log_prompts = True  # noqa: SLF001
+    client.complete_json("s", "u")
+
+    assert len(_events(caplog, "llm.request")) == 2, "repair call must be visible"
