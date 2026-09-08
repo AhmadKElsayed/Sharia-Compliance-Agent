@@ -9,6 +9,15 @@ Built for an internal compliance team: a reviewer asks a question in plain
 English and gets back an auditable answer with the exact clauses that support
 it, plus everything the agent could not determine.
 
+**Live:** <https://sharia-compliance-agent.onrender.com/docs> · no sign-in
+required
+
+> **The knowledge base is the real thing.** Not a synthesised or summarised
+> corpus — this indexes the actual published AAOIFI *Shari'ah Standards*
+> (English edition): **1,264 pages, 54 standards, 1,973 normative clauses**,
+> parsed clause by clause from the source PDF. Every citation resolves to a real
+> AAOIFI rule number a reviewer can look up in the book.
+
 > **Decision support, not a ruling.** Every response carries a disclaimer and
 > requires review by a qualified Sharia reviewer. It does not substitute for
 > Sharia Supervisory Board approval.
@@ -18,10 +27,13 @@ it, plus everything the agent could not determine.
 ## What it does
 
 ```bash
-curl -X POST http://localhost:8000/assess \
+curl -X POST https://sharia-compliance-agent.onrender.com/assess \
   -H "Content-Type: application/json" \
   -d '{"query": "Can we charge a late payment penalty on a Murabaha and keep it as bank income?"}'
 ```
+
+> The free instance sleeps after 15 minutes idle, so the first request may take
+> ~50s to cold-start. Subsequent assessments run in 9–25s.
 
 ```json
 {
@@ -84,7 +96,7 @@ flowchart TB
         direction TB
         P["1 · parse_query<br/><i>LLM call 1 — extract structure</i>"]
         PL["2 · plan_retrieval<br/><i>derive 2–4 sub-queries</i>"]
-        R["3 · retrieve<br/><i>embed, search, dedupe, rank</i>"]
+        R["3 · retrieve<br/><i>embed, search, RRF fuse, rerank</i>"]
         A["4 · assess<br/><i>LLM call 2 — findings + citations</i>"]
         V["5 · verify_citations<br/><i>drop unverifiable references</i>"]
         D["6 · decide_verdict<br/><i>deterministic rules</i>"]
@@ -102,8 +114,8 @@ flowchart TB
     A <-->|"chat completions"| OR
     R <-->|"vector search"| QD
 
-    OR[("OpenRouter<br/>chat + embeddings")]
-    QD[("Qdrant Cloud<br/>1,973 clause vectors")]
+    OR[("OpenRouter<br/>chat + embeddings + rerank")]
+    QD[("Qdrant Cloud<br/>1,973 AAOIFI clause vectors")]
 
     G -.->|"structured events"| LOG["JSON logs + trace store<br/>replayable per trace ID"]
 
@@ -250,10 +262,26 @@ Errors use the same envelope shape as success, never a bare string:
 
 ## How it works
 
-### Corpus and chunking
+### Corpus — the real AAOIFI standards
 
-The corpus is the AAOIFI *Shari'ah Standards*, English edition: **1,264 pages,
-54 standards, 1,973 normative clauses**.
+The knowledge base is the **actual AAOIFI *Shari'ah Standards*, English
+edition** — the published reference that Islamic financial institutions are
+audited against — parsed directly from the source PDF: **1,264 pages, 54
+standards, 1,973 normative clauses**, ~103,500 words.
+
+This was a deliberate choice over a synthesised corpus. A demo built on
+paraphrased rules can produce fluent output that no reviewer can verify; here,
+every citation is a real AAOIFI clause number (`SS-08 §4/8`) that resolves to a
+specific rule in the published book. It also meant the hard problems were real
+ones — a duplicated PDF text layer, six standards with inconsistent heading
+formats, and 336 numbered lines that are section headings rather than rules (see
+[Extraction](#extraction)).
+
+The source PDFs live in [corpus/pdf/](corpus/pdf/). A small synthesised corpus
+is kept in [corpus/demo/](corpus/demo/) so the test suite and a fresh clone run
+without them.
+
+### Chunking
 
 **The chunk unit is one clause.** AAOIFI numbers every rule (`2/1/2`), and those
 boundaries were chosen by the drafters — fixed token windows would cut rules in
@@ -282,18 +310,84 @@ retrieval.
 
 ### Extraction
 
-The source PDF fakes bold by drawing every span twice, which naive extraction
-turns into `"Hamish JiddiyyahHamish Jiddiyyah"`. Span analysis showed 66 spans
-per page of which 33 were unique, making the fix exact rather than heuristic:
-drop any span already drawn at the same coordinates.
+Working from the real document meant three real problems, two of which corrupted
+data silently.
+
+**A duplicated text layer.** The PDF fakes bold by drawing every span twice,
+which naive extraction turns into `"Hamish JiddiyyahHamish Jiddiyyah"`. Span
+analysis showed 66 spans per page of which 33 were unique, making the fix exact
+rather than heuristic: drop any span already drawn at the same coordinates.
+
+**A one-character regex bug that produced wrong citations.** Standards 42–44 and
+46–48 are headed `"No (44)"` while the rest use `"No. (8)"`. The header pattern
+required the period, so those six standards were invisible and their clauses
+silently inherited the *preceding* standard's number — clauses from *Obtaining
+and Deploying Liquidity* were being cited as *Islamic Reinsurance*. Nothing
+failed; it surfaced only because Standard 41 had an implausible 106 clauses. In a
+compliance tool this is the worst class of defect: confident and wrong.
+
+**Headings that look like rules.** A two-level number such as `2/1` is a heading
+where clauses nest beneath it and a rule where they do not, so it is resolved per
+standard rather than by depth — 336 headings excluded from the index.
 
 ### Retrieval
 
-Each assessment derives 2–4 sub-queries from the parsed product features rather
-than embedding the raw question once, then merges and ranks the results. On
-measured examples, in-scope queries score 0.40–0.68 while an out-of-scope query
-scores 0.19, which is what makes the coverage threshold a usable
-`NEEDS_REVIEW` signal.
+Four stages, each added to fix a measured failure:
+
+```
+query
+  → 2–4 grounded sub-queries      anchored to the product, not bare concepts
+  → vector search, top_k=10 each  text-embedding-3-large (3072-d), Qdrant
+  → RRF fusion, K=60              rank-based, not score-based
+  → cross-encoder rerank, 24 → 8  voyageai/rerank-2.5
+```
+
+**Sub-queries are grounded in the product.** An early version emitted bare
+concept names, so a savings-account question produced the sub-query `"riba"` and
+retrieved the general prohibition instead of the deposit rules that govern it.
+Sub-queries are now anchored — `"savings account guaranteed return"` — which
+fixed the first production retrieval failure.
+
+**Fusion is rank-based.** Similarity scores from different sub-queries are not on
+a common scale, so averaging them is arithmetic on incomparable numbers.
+Reciprocal rank fusion uses only within-query rank, which is comparable by
+construction.
+
+**Reranking is never a dependency.** If the rerank call fails, retrieval falls
+back to the fused order and records the degradation — a degraded ranking beats a
+failed assessment.
+
+### Measured retrieval quality
+
+`evals/golden_set.py` pairs 22 queries with the AAOIFI standards a competent
+reviewer would consult, plus 3 out-of-scope queries. It runs the real retrieval
+path with **no LLM in the loop**, so a regression can be attributed without model
+variance confounding it:
+
+```bash
+python scripts/eval_retrieval.py              # ~30s
+python scripts/eval_retrieval.py --no-rerank  # compare configurations
+```
+
+| Configuration | Recall | MRR | Latency/query |
+|---|---|---|---|
+| top_k=5, no rerank | 0.955 | 0.898 | 0.72s |
+| top_k=10, no rerank | 0.955 | 0.898 | 0.66s |
+| top_k=5, rerank | 0.955 | 0.895 | 1.18s |
+| **top_k=10, rerank** *(current)* | **1.000** | **0.924** | 1.26s |
+
+**Neither change helps alone.** At k=5 the governing clause never enters the
+candidate pool, so the reranker has nothing to promote; at k=10 without reranking
+it enters but sits below the cutoff. Shipped separately, either would have looked
+like a no-op.
+
+Out-of-scope queries top out at **0.255** against a 0.35 coverage threshold,
+which is what makes that threshold a usable `NEEDS_REVIEW` signal rather than a
+guess.
+
+> These pairs were written by an engineer reading the corpus, not by a Sharia
+> scholar. They detect retrieval regressions and compare retrieval strategies.
+> They do **not** certify verdict correctness.
 
 ---
 
@@ -313,11 +407,15 @@ All settings live in `app/config.py` and load from `.env`. See `.env.example`.
 | `LLM_MAX_TOKENS` | `12000` | Must cover the reasoning pass *and* the answer. |
 | `QDRANT_URL` / `QDRANT_API_KEY` | — | Required. |
 | `QDRANT_COLLECTION` | `aaoifi_ss_en` | |
-| `RETRIEVAL_TOP_K` | `5` | Per sub-query. |
+| `RETRIEVAL_TOP_K` | `10` | Per sub-query. See note below. |
 | `RETRIEVAL_SCORE_THRESHOLD` | `0.35` | Below this, coverage is judged insufficient. |
+| `RERANK_ENABLED` | `true` | Cross-encoder reranking over the fused candidates. |
+| `RERANK_MODEL` | `voyageai/rerank-2.5` | Served via OpenRouter, so no extra key. |
+| `RERANK_CANDIDATES` | `24` | Pool size before reranking down to 8 excerpts. |
+| `LOG_PROMPTS` | `true` | Logs the resolved prompt. **Disable in production.** |
 | `LOG_LEVEL` / `LOG_FILE` | `INFO` / `logs/app.jsonl` | |
 
-Two defaults are measured rather than guessed:
+Three defaults are measured rather than guessed:
 
 **`OPENROUTER_PROVIDER_SORT=throughput`** — OpenRouter serves this model from 29
 providers. Default routing selected one running at 15.6 tok/s; throughput-sorted
@@ -329,12 +427,15 @@ larger budget the model invents `CONDITIONAL` findings about details the query
 never raised, downgrading correct `COMPLIANT` verdicts. More reasoning is not
 monotonically better here.
 
+**`RETRIEVAL_TOP_K=10` with `RERANK_ENABLED=true`** — measured on the golden set
+above; the pair takes recall from 0.955 to 1.000, and neither half helps alone.
+
 ---
 
 ## Testing
 
 ```bash
-pytest -q            # 137 tests, ~8s, no network, no credentials
+pytest -q            # 156 tests, ~8s, no network, no credentials
 ```
 
 The suite runs entirely offline: an in-memory vector store implements the same
@@ -345,10 +446,13 @@ the LLM is scripted. Coverage focuses on the properties that matter:
   and the verdict downgrades to `NEEDS_REVIEW`
 - **Empty findings never yield `COMPLIANT`** — silence is not evidence
 - **Weak retrieval forces review**, and the broaden-retry edge fires exactly once
-- **Extraction integrity** — clause IDs unique, no duplicated text, headings
-  excluded
+- **Extraction integrity** — clause numbering preserved, running headers
+  stripped, clauses rejoined across page breaks *(covers `pdf_loader.py`; the
+  AAOIFI extractor is exercised only indirectly — see limitations)*
 - **API contract** — status codes, error envelope, trace header, and `/health`
   reporting `503` honestly
+- **Reranking degrades, never fails** — a reranker that raises or times out
+  leaves retrieval working on the fused order
 
 ---
 
@@ -370,14 +474,19 @@ app/
     chunking.py        Chunk model, contextual headers
     embedder.py        Embedder protocol; OpenRouter + offline hashing
     store.py           VectorStore protocol; Qdrant + in-memory
+    rerank.py          Reranker protocol; OpenRouter cross-encoder
     ingest.py          Load, chunk, embed, upsert
   observability/
     trace.py           Trace-ID contextvar and middleware
     logging_setup.py   JSON-lines logging
     traces.py          Bounded trace store for replay
-corpus/                Source PDFs, demo corpus, markdown sources
-scripts/               ingest.py, build_corpus_pdfs.py
-tests/                 137 tests
+corpus/
+  pdf/                 The real AAOIFI Shari'ah Standards (EN + AR)
+  demo/                Synthesised corpus, so a clone runs without them
+  source/              Markdown sources for the demo corpus
+evals/golden_set.py    22 query → expected-standard pairs
+scripts/               ingest.py, eval_retrieval.py, build_corpus_pdfs.py
+tests/                 156 tests
 ```
 
 ---
@@ -386,19 +495,29 @@ tests/                 137 tests
 
 - **Decision support only.** Not a Sharia ruling; requires review by a qualified
   reviewer and does not substitute for Sharia Supervisory Board approval.
-- **No evaluation set yet.** Retrieval and verdict quality are evidenced by spot
-  checks, not measurement. This is the most valuable next investment.
+- **Verdict quality is unmeasured.** Retrieval is measured (above); verdict
+  correctness is not. That needs a scholar-authored eval set, and until it
+  exists the false-`COMPLIANT` rate — the one error that can cause real harm —
+  is unknown. This is the most valuable next investment.
 - **Verdicts are not fully deterministic.** On one borderline query, five
   identical runs produced two `COMPLIANT` and three `NEEDS_REVIEW`.
 - **English only.** Arabic is the authoritative AAOIFI text, so the system
   currently reasons from a translation. Clause numbering is identical across
   editions and `lang` is already a payload field, so adding Arabic is a filter
-  and a re-ingest rather than a redesign.
-- **Retrieval is single-stage.** No reranker; one observed miss (a takaful query
-  failing to surface Standard 26) would likely be fixed by a cross-encoder.
-- **Synchronous.** Each request holds a worker for 9–20 seconds.
+  and a re-ingest rather than a redesign — the Arabic PDF is already in the
+  repository.
+- **Appendices excluded.** The juristic reasoning behind each ruling is not
+  indexed, so the agent can state a rule but not the reasoning behind it.
+- **The AAOIFI extractor has no dedicated tests.** The most intricate module —
+  the one that produced a silent citation-corruption bug — is exercised only
+  indirectly. The next extraction regression would be found the way the last one
+  was: by a human noticing an implausible number.
+- **Synchronous.** Each request holds a worker for 9–25 seconds.
 - **Unauthenticated**, with per-process rate limiting only.
 - **Traces are in-process** and lost on restart.
+- **`LOG_PROMPTS` defaults on**, writing query text to logs in plaintext.
+  Reproducibility beats confidentiality in a demonstrator; that inverts in
+  production.
 
 Architecture rationale, production scaling, evaluation design, and security
 analysis are covered separately in the architecture and trade-offs document.

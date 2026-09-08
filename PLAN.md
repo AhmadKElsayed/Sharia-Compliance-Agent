@@ -1,43 +1,58 @@
-# Implementation Plan — Sharia Compliance Agent
+# Implementation Plan & Build Log — Sharia Compliance Agent
 
-**Status:** planning complete, implementation not started
-**Date:** 2026-09-08
+**Status:** delivered. All ten phases complete, deployed at
+<https://sharia-compliance-agent.onrender.com>, 156 tests green.
+**Planned:** 2026-09-08 · **Completed:** 2026-09-09
+
+This document is kept as a record of what was planned and **where reality
+diverged from it**. Section 2 is the honest part: six decisions in the original
+plan turned out to be wrong, and the reasons are more informative than the plan
+itself. Deep architectural rationale lives in `DOCUMENTATION.md`; usage lives in
+`README.md`.
 
 ---
 
 ## 1. Objective
 
-A production-grade AI agent for Mal's internal compliance team that assesses whether a
-proposed financial product or transaction is Sharia-compliant, returning a structured
-verdict (`COMPLIANT` / `NON_COMPLIANT` / `NEEDS_REVIEW`) with cited reasoning, exposed
-over a public REST API.
+A production-grade AI agent for Mal's internal compliance team that assesses
+whether a proposed financial product or transaction is Sharia-compliant,
+returning a structured verdict (`COMPLIANT` / `NON_COMPLIANT` / `NEEDS_REVIEW`)
+with cited reasoning, exposed over a public REST API.
+
+**Delivered.** Unchanged from the original objective.
 
 ---
 
-## 2. Locked decisions
+## 2. Where the plan changed
+
+| # | Planned | Actually built | Why it changed |
+|---|---|---|---|
+| 1 | **Synthesised corpus** — 6 in-house documents modelled on AAOIFI themes | **The real AAOIFI *Shari'ah Standards*** — 1,264 pages, 54 standards, 1,973 clauses, parsed from the published PDF | The user supplied the real PDFs mid-build and asked to "build something real using the real docs". The synthesised corpus was a trap: paraphrased rules produce fluent output whose citations point at documents that exist only in this repo, making the system's central claim unverifiable. |
+| 2 | `text-embedding-3-small`, 1536 dims | **`text-embedding-3-large`, 3072 dims** | Retrieval quality is the binding constraint on verdict quality, and the cost difference on a 147K-token corpus is under two cents. |
+| 3 | **Single-stage vector search**, top_k=5 | **Grounded sub-queries → RRF fusion → cross-encoder rerank**, top_k=10 | A live query retrieved the general riba prohibition instead of the deposit rules that govern it. Diagnosis via trace showed a retrieval failure, not a reasoning one. See §4. |
+| 4 | **Docker image + `render.yaml` blueprint** | **Native Python runtime, configured in the Render dashboard** | Render builds Python natively from `requirements.txt`; a Dockerfile added a build step and an image to maintain for no benefit at this size. Neither file exists in the repo. |
+| 5 | **Retrieval smoke tests** — a handful of golden query/document pairs inside the pytest suite | **A standalone 22-case golden eval set** with its own runner (`scripts/eval_retrieval.py`) | Retrieval quality needed to be *measured and compared across configurations*, not merely asserted. Folding it into pytest would have made it a pass/fail gate rather than a metric, and it needs network access the offline suite deliberately avoids. |
+| 6 | Verdict rules: `CONDITIONAL` **or** `UNRESOLVED` → `NEEDS_REVIEW`, flat | **Findings vs open questions split**, with an ordered rule table | With a 1,973-clause corpus the model raised `UNRESOLVED` findings about anything the query was silent on — and every query is silent on something. The rule as planned made nothing ever `COMPLIANT`. See §5. |
+
+Three planned items were **not built** and are recorded as cuts in
+`DOCUMENTATION.md` §6: durable trace storage, the offline replay harness, and
+batched sub-query embeddings.
+
+---
+
+## 3. Locked decisions — as built
 
 | Decision | Choice | Rationale |
 |---|---|---|
 | Language | Python 3.11 | Task constraint. 3.11 rather than 3.13 for widest wheel availability. |
-| LLM gateway | **OpenRouter** via the `openai` SDK with `base_url=https://openrouter.ai/api/v1` | User has a paid subscription. OpenAI-compatible, so no vendor lock-in in code. |
-| Chat model | Env var `OPENROUTER_MODEL` plus an `OPENROUTER_FALLBACK_MODELS` list | Paid sub means we can use a strong model with reliable JSON adherence. The fallback chain covers provider outages and model retirement. |
-| Embeddings | **OpenRouter `/embeddings`**, default `openai/text-embedding-3-small` (1536 dims) | Same key, same SDK, same bill as chat. Removes the need to host any model. ~$0.02/M tokens, so indexing the whole corpus costs well under a cent. |
-| Vector store | **Qdrant Cloud free tier**, behind a `VectorStore` protocol | User's choice; credentials supplied. Free forever at 0.5 vCPU / 1 GB RAM / 4 GB disk. Index lives outside the container, so re-ingesting never requires a redeploy. |
+| LLM gateway | **OpenRouter** via the `openai` SDK | Paid subscription. OpenAI-compatible, so no vendor lock-in in code. Chat, embeddings **and** reranking all traverse one key. |
+| Chat model | **`deepseek/deepseek-v4-flash-0731`**, with `OPENROUTER_FALLBACK_MODELS` | Reliable JSON adherence at low cost. The fallback chain covers provider outages and model retirement. |
+| Embeddings | **`openai/text-embedding-3-large`** (3072 dims) via OpenRouter `/embeddings` | Same key, same SDK, same bill as chat. ~$0.02 to index the whole corpus. |
+| Reranking | **`voyageai/rerank-2.5`** via OpenRouter `/rerank` | Cross-encoder over the fused candidates. No extra credential — though the endpoint is live but undocumented, which is a supply-chain caveat. |
+| Vector store | **Qdrant Cloud free tier**, behind a `VectorStore` protocol | Credentials supplied by the user. Index lives outside the container, so re-ingesting never requires a redeploy. |
 | Agent framework | **LangGraph** `StateGraph` | Task constraint. All node logic is plain Python in this repo — no black-box abstraction. |
-| API | **FastAPI** + Uvicorn | Task-suggested. Native Pydantic schemas give the structured JSON contract for free. |
-| Deploy | **Render** free web service, Docker | 750 hours/month, no credit card, public HTTPS URL requiring no sign-in. |
-
-### What the paid OpenRouter subscription changes
-
-The earlier draft of this plan was shaped around the free tier's 50 requests/day ceiling
-and the absence of an embeddings endpoint. Both constraints are now gone:
-
-- No meaningful throughput cap, so the two-LLM-call design needs no rationing. The LRU
-  cache stays, but as a latency optimisation rather than a quota defence.
-- A stronger chat model can be used, so strict-JSON adherence is reliable. The defensive
-  parser and repair retry remain as a safety net, not a load-bearing workaround.
-- Embeddings come from the same key. No local model, no `torch`, no `onnxruntime`, and no
-  second provider account.
+| API | **FastAPI** + Uvicorn | Native Pydantic schemas give the structured JSON contract for free. |
+| Deploy | **Render** free web service, **native Python** | 750 hours/month, no credit card, public HTTPS URL requiring no sign-in. |
 
 ### Reasoning calibration
 
@@ -81,31 +96,29 @@ Caveat on method: one run per cell, four queries. Enough to reject `high`, whose
 failure has a clear structural mechanism, but not a precise quality ranking of
 `low` against `off`.
 
-### Cost and quota profile
+### Cost profile — as built
 
 | Item | Where it runs | Cost |
 |---|---|---|
 | Chat completions (2 per assessment) | OpenRouter | Paid subscription |
-| Embeddings (corpus ~25K tokens once; queries trivial) | OpenRouter | Under $0.01 total to index |
-| Vector storage (~120 vectors × 1536 dims ≈ 740 KB) | Qdrant Cloud | Free tier, ~0.02% of the 4 GB disk |
+| Embeddings (corpus ~147K tokens once; queries trivial) | OpenRouter | **≈ $0.02** to index |
+| Reranking (24 candidates per assessment) | OpenRouter → Voyage | Negligible at demo volume; **~28% of the bill** at 50k/day (see `DOCUMENTATION.md` §2.1) |
+| Vector storage (1,973 vectors × 3072 dims ≈ **24 MB**) | Qdrant Cloud | Free tier, ~0.6% of the 4 GB disk |
 | API hosting | Render | Free tier, 750 h/month |
+
+The corpus ended up ~16× the planned vector count and ~32× the planned storage
+(the vectors are also twice as wide), and it is still well inside the free tier —
+the plan's caution about storage was misplaced. The real constraint is 0.5 shared
+vCPU serving ~4 searches per assessment.
 
 ### Memory budget
 
-No longer a binding constraint. Dropping local embeddings and the embedded vector store
-removes roughly 290 MB from the earlier estimate:
-
-| Component | Estimated resident |
-|---|---|
-| FastAPI + Uvicorn + LangGraph | ~80 MB |
-| `openai` + `qdrant-client` | ~25 MB |
-| Headroom on a 512 MB instance | ~400 MB |
-
-The container is now thin: it holds no model weights and no index, only client code.
+The container holds no model weights and no index, only client code. Never became
+a binding constraint, as expected.
 
 ---
 
-## 3. Architecture
+## 4. Architecture — as built
 
 ```
                     POST /assess   { "query": "..." }
@@ -123,17 +136,17 @@ The container is now thin: it holds no model weights and no index, only client c
   1. parse_query        LLM #1: extract product structure and features,
                         check scope. Rejects out-of-scope input early.
                                 |
-  2. plan_retrieval     Derive 2-4 targeted sub-queries from the
-                        extracted features (pure Python + templates).
+  2. plan_retrieval     Derive 2-4 sub-queries, each grounded in the
+                        product name (pure Python + templates).
                                 |
-  3. retrieve           Embed sub-queries via OpenRouter, search Qdrant,
-                        dedupe, rerank, cap the context window.
+  3. retrieve           Embed sub-queries, search Qdrant top_k=10 each,
+                        fuse by reciprocal rank (K=60), rerank 24 -> 8.
                                 |
   4. [conditional]      Weak retrieval? Broaden queries, loop once (max 1).
                                 |
-  5. assess             LLM #2: per-issue findings (riba, gharar, maysir,
-                        asset backing, prohibited sector), each carrying
-                        explicit chunk citations.
+  5. assess             LLM #2: findings (riba, gharar, maysir, asset
+                        backing, prohibited sector) with explicit chunk
+                        citations, plus open questions kept separate.
                                 |
   6. verify_citations   Drop any citation ID absent from the retrieved
                         set. Hallucinated support cannot survive.
@@ -144,217 +157,299 @@ The container is now thin: it holds no model weights and no index, only client c
                 |     Structured JSON response   |
                 +--------------------------------+
 
-External services:  OpenRouter (chat + embeddings)  |  Qdrant Cloud (vector search)
+External:  OpenRouter (chat + embeddings + rerank)  |  Qdrant Cloud (search)
 ```
 
-### Why a graph rather than a chain
+### The retrieval rebuild (divergence #3)
 
-Two things genuinely need graph semantics: the **conditional retry edge** (weak retrieval
-broadens the sub-queries and re-retrieves once) and the **citation-verification gate**
-(which can downgrade a verdict and short-circuit). A linear chain would hide both.
+The plan's single-stage vector search shipped and then failed in production on
+the query *"Can Mal offer a savings account guaranteeing depositors a fixed 4%
+annual return?"* — it returned the general riba prohibition rather than the
+deposit rules that actually govern the case. The trace showed why: the planner
+had emitted the bare sub-query `"riba"`.
 
-### Verdict rules (deterministic, in `agent/verdict.py`)
+Three fixes, in order:
 
-Aggregation is plain Python so the outcome is auditable and testable. The LLM produces
-*findings*; the code produces the *verdict*:
+1. **Grounded sub-queries.** Anchor each sub-query to the product —
+   `"savings account guaranteed return"`, not `"riba"`.
+2. **Rank fusion instead of score merging.** Similarity scores from different
+   sub-queries are not on a common scale, so averaging them is arithmetic on
+   incomparable numbers. RRF (K=60) uses only within-query rank.
+3. **Cross-encoder reranking over a wider pool.** top_k 5 → 10 with
+   `voyageai/rerank-2.5` reranking 24 candidates down to 8.
 
-- Any finding of severity `PROHIBITED` that survives citation verification → `NON_COMPLIANT`
-- Any `CONDITIONAL` or `UNRESOLVED` finding, or a top retrieval score below threshold, or
-  a corpus that lacks coverage for an identified feature → `NEEDS_REVIEW`
-- All identified features cleared with grounded citations → `COMPLIANT`
-- A `NON_COMPLIANT` verdict whose citations were all stripped as hallucinated is
-  downgraded to `NEEDS_REVIEW` — fail safe, never fail confident
+Measured on the golden set, the third fix is only worth it as a pair:
 
-Ambiguity resolves toward `NEEDS_REVIEW`. For a compliance tool, a false `COMPLIANT` costs
-far more than an unnecessary human review.
+| Configuration | Recall | MRR | Latency/query |
+|---|---|---|---|
+| top_k=5, no rerank | 0.955 | 0.898 | 0.72s |
+| top_k=10, no rerank | 0.955 | 0.898 | 0.66s |
+| top_k=5, rerank | 0.955 | 0.895 | 1.18s |
+| **top_k=10, rerank** | **1.000** | **0.924** | 1.26s |
+
+Neither half helps alone. Shipped separately, either would have looked like a
+no-op and been reverted — which is the clearest argument in this project for
+building the eval set *before* tuning.
+
+### Verdict rules — as built (divergence #6)
+
+Aggregation is an **ordered rule table** in `app/agent/verdict.py`; the first
+match wins and the rule name is recorded in the response, so a reviewer sees
+exactly why the verdict came out as it did:
+
+1. Out of scope → `NEEDS_REVIEW` (`out_of_scope`)
+2. Top score below the coverage threshold → `NEEDS_REVIEW`
+   (`insufficient_corpus_coverage`)
+3. No findings at all → `NEEDS_REVIEW` (`no_findings`) — silence is not evidence
+4. `PROHIBITED` findings, all citations stripped → `NEEDS_REVIEW`
+   (`prohibited_findings_lost_all_citations`) — never convict on fabricated
+   evidence
+5. `PROHIBITED` with a surviving citation → `NON_COMPLIANT`
+   (`grounded_prohibition`)
+6. `UNRESOLVED` → `NEEDS_REVIEW` · 7. `CONDITIONAL` → `NEEDS_REVIEW`
+8. `PERMISSIBLE` but ungrounded → `NEEDS_REVIEW`
+9. All findings permissible and grounded → `COMPLIANT`
+
+**The findings/open-questions split** is what the plan missed. With a
+1,973-clause corpus the model began raising `UNRESOLVED` findings about details
+the query was simply silent on — commingling disclosure, and so forth. That
+logic is degenerate: *every* query is silent on something a corpus this size
+mentions, so "silent on X → `NEEDS_REVIEW`" makes nothing ever `COMPLIANT`.
+Findings now concern what the proposal actually states and drive the verdict;
+open questions reach the reviewer but never change it. The exception is explicit
+in the prompt: where a missing detail *is* the pivot on which permissibility
+turns, it stays a `CONDITIONAL` finding.
 
 ---
 
-## 4. Corpus
+## 5. Corpus — as built (divergence #1)
 
-Five to six short documents, **synthesized in-house** and modeled on the themes of AAOIFI
-Shari'ah Standards. Every document carries a header stating that it is an educational
-synthesis and **not** authentic AAOIFI text — the agent must never present fabricated
-passages as a real standards body's wording.
+The real **AAOIFI *Shari'ah Standards*, English edition**: 1,264 pages, 54
+standards, **1,973 normative clauses**, ~103,500 words, extracted from the
+published PDF into one chunk per numbered clause, each embedded under its full
+heading lineage.
 
-| ID | Topic |
-|---|---|
-| SFS-001 | Riba: prohibition of interest and guaranteed returns on deposits |
-| SFS-002 | Murabaha: cost-plus sale, ownership and disclosure requirements |
-| SFS-003 | Ijarah: leasing, risk of ownership, maintenance obligations |
-| SFS-004 | Gharar and maysir: excessive uncertainty, speculation, conventional insurance and derivatives |
-| SFS-005 | Mudarabah and Musharakah: profit sharing, loss attribution, profit equalization reserves |
-| SFS-006 | Sector and financial screening criteria for permissible investment |
+The synthesised corpus survives as `corpus/demo/` — six documents (SFS-001
+through SFS-006) — solely so the test suite and a fresh clone run without the
+licensed PDFs. It is no longer what the deployed system reasons from.
 
-Each document uses stable section anchors so that citations resolve to a real location —
-`SFS-001 §3.2`, not a bare filename.
+**Extraction was the unplanned work.** Three problems, two of which corrupted
+data silently:
+
+- **A duplicated text layer.** The PDF fakes bold by drawing every span twice.
+  Fixed exactly, not heuristically, by dropping any span already drawn at the
+  same coordinates (66 spans per page, 33 unique).
+- **A one-character regex bug.** Standards 42–44 and 46–48 are headed
+  `"No (44)"` while the rest use `"No. (8)"`. Requiring the period made six
+  standards invisible and their clauses silently inherited the preceding
+  standard's number. Nothing failed; it surfaced only because Standard 41 had an
+  implausible 106 clauses.
+- **Headings that look like rules.** `2/1` is a heading where clauses nest
+  beneath it and a rule where they do not — resolved per standard, 336 headings
+  excluded.
+
+The second of those is the strongest argument in this project for
+extraction-level assertions at ingest, which are **not** built
+(`DOCUMENTATION.md` §3.3).
 
 ---
 
-## 5. Repository layout
+## 6. Repository layout — as built
 
 ```
 app/
-  main.py             FastAPI app, route handlers, lifespan
+  main.py             FastAPI app, endpoints, lifespan
   config.py           pydantic-settings, env loading
   schemas.py          Request/response Pydantic models
   observability/
     logging_setup.py  JSON-lines logger, stdout and file
     trace.py          contextvar trace ID, middleware
+    traces.py         Bounded in-process trace store for replay
   rag/
-    embedder.py       Embedder protocol, OpenRouter implementation, batching
-    chunking.py       Section-aware chunker that preserves anchors
-    store.py          VectorStore protocol, Qdrant implementation, in-memory fake
-    ingest.py         Load, chunk, embed, upsert to Qdrant
+    aaoifi.py         AAOIFI PDF extractor (span dedup, clause hierarchy)
+    pdf_loader.py     PDF text extraction
+    chunking.py       Chunk model, contextual headers
+    embedder.py       Embedder protocol, OpenRouter + offline hashing
+    store.py          VectorStore protocol, Qdrant + in-memory
+    rerank.py         Reranker protocol, OpenRouter cross-encoder
+    ingest.py         Load, chunk, embed, upsert
   agent/
     state.py          AgentState TypedDict
     graph.py          StateGraph wiring and conditional edges
     nodes.py          The six node functions
-    prompts.py        Versioned prompt templates
+    prompts.py        Versioned prompt templates (PROMPT_VERSION)
     verdict.py        Deterministic aggregation rules
-    llm.py            OpenRouter chat client, retries, fallback chain, JSON repair
-corpus/               The source documents
-scripts/ingest.py     CLI entry point for building the Qdrant collection
-tests/                pytest suite
-Dockerfile            Thin runtime image; no model weights, no index
-render.yaml           Render blueprint
-requirements.txt
+    llm.py            OpenRouter chat client, retries, fallback, JSON repair
+corpus/
+  pdf/                The real AAOIFI standards (EN + AR)
+  demo/               Synthesised corpus, so a clone runs without them
+  source/             Markdown sources for the demo corpus
+evals/golden_set.py   22 query -> expected-standard pairs
+scripts/              ingest.py, eval_retrieval.py, build_corpus_pdfs.py
+tests/                156 tests
+requirements.txt      Runtime only
+requirements-ingest.txt   Adds PyMuPDF + ReportLab for offline extraction
 .env.example
 ```
 
-### Qdrant specifics
+**Not built:** `Dockerfile`, `render.yaml` (divergence #4).
 
-- Collection created with `size=1536`, `distance=COSINE`, matching
-  `openai/text-embedding-3-small`. Changing the embedding model changes the vector
-  dimension, so `scripts/ingest.py` supports `--recreate` and validates the existing
-  collection's dimension on startup, failing loudly on mismatch rather than silently
-  returning nonsense.
-- Point payload carries `doc_id`, `section`, `title`, `text`, and `chunk_id` so a retrieval
-  result is directly citable without a second lookup.
-- Ingest is idempotent: deterministic point IDs derived from `chunk_id`, so re-running
-  upserts in place rather than duplicating.
-- Retrieval uses `query_points` with a score threshold; the threshold feeds the
-  `NEEDS_REVIEW` coverage rule.
+`requirements.txt` splitting into three was unplanned: PyMuPDF is AGPL and is
+used only by the offline extractor, so keeping it out of the runtime image was
+worth a separate file.
+
+### Qdrant specifics — as built
+
+- Collection created with `size=3072`, `distance=COSINE`, matching
+  `text-embedding-3-large`. `scripts/ingest.py` supports `--recreate` and
+  validates the existing collection's dimension, failing loudly on mismatch
+  rather than silently returning nonsense.
+- Payload carries `chunk_id`, `doc_id`, `title`, `topic`, `heading`,
+  `section_label`, `citation`, `text`, `breadcrumb`, `lang` — so a retrieval
+  result is directly citable without a second lookup, and an Arabic edition
+  becomes a filter rather than a re-ingest.
+- Ingest is idempotent: deterministic UUIDs derived from `chunk_id`.
+- **Unplanned:** upserts are batched at 128 points. The full corpus in one
+  request is ~24 MB, and the managed endpoint closes the connection rather than
+  returning an error.
 
 ---
 
-## 6. Observability
+## 7. Observability — as built
 
-Structured JSON lines to stdout **and** a rotating file. A trace ID (UUID4) is minted per
-request by middleware and stored in a `contextvar`, so every module picks it up without
-threading it through call signatures. It is returned in the `X-Trace-Id` response header
-and in the JSON body.
+Structured JSON lines to stdout **and** a file. A trace ID is minted or adopted
+per request by middleware and stored in a `contextvar`, so every module picks it
+up without threading it through call signatures. It is returned in the
+`X-Trace-Id` response header and in the JSON body.
 
 Logged per assessment, all sharing one `trace_id`:
 
-- `request.received` — method, path, client, query
-- `agent.node.start` / `agent.node.end` — node name, latency
-- `retrieval.result` — sub-queries, chunk IDs, similarity scores, source document and section
+- `request.received` — path, query
+- `retrieval.result` — sub-queries, chunk IDs, similarity scores, top score
 - `llm.request` — model, fully resolved prompt text, token estimate
 - `llm.response` — raw completion, latency, finish reason, model actually served
-- `verdict.decided` — verdict, the rule that fired, surviving citations
-- `request.completed` — status, total latency
+- `verdict.decided` — verdict, the rule that fired, confidence
+- `request.completed` — verdict, latency, rejected citations, errors
 
-`GET /traces/{trace_id}` replays a stored trace, so a reviewer can audit exactly what the
-agent saw and sent. Prompt logging is toggleable via `LOG_PROMPTS` for environments where
-prompt text is sensitive.
+`GET /traces/{trace_id}` replays a stored trace. Prompt logging is toggleable via
+`LOG_PROMPTS`.
+
+**Two refinements the plan did not anticipate:**
+
+- `llm.request` fires **before** the API call, not after, so a call that times
+  out or fails still leaves behind exactly what was sent.
+- Traces must record **token composition**, not just totals. The
+  `max_tokens=3072` failure presented as "the model is bad at JSON" and was only
+  diagnosable once reasoning-vs-content token counts were visible.
+
+Trace storage is bounded and in-process, so traces are lost on restart and are
+invisible across instances. Recorded as a cut.
 
 ---
 
-## 7. API contract
+## 8. API contract — as built
 
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/assess` | Submit a plain-English query, receive a structured verdict |
-| `GET` | `/health` | Liveness and readiness: Qdrant reachable, collection present, vector count, model configured |
-| `GET` | `/corpus` | List ingested documents and section anchors |
+| `GET` | `/health` | Liveness and readiness: Qdrant reachable, collection populated, config complete |
+| `GET` | `/corpus` | What is indexed — counts and identifiers only |
 | `GET` | `/traces/{trace_id}` | Replay a stored trace for audit |
-| `GET` | `/docs` | OpenAPI UI (FastAPI built-in) |
+| `GET` | `/docs` | OpenAPI UI |
 
-Because retrieval now depends on a network service, `/health` distinguishes **liveness**
-(process up) from **readiness** (Qdrant reachable and the collection populated), and
-returns 503 when the dependency is down rather than reporting a false green.
+`/health` returns **503** when Qdrant is unreachable or empty or configuration is
+incomplete, rather than reporting a false green.
 
-`POST /assess` response shape:
+**Changed from the planned response shape:** `summary` became `rationale`
+(generated by the verdict rule, not the model), `rule` was added so the reviewer
+can see which rule fired, `open_questions` was added (divergence #6), and
+`rejected_citations` was added so a stripped hallucination is visible rather than
+silent. See `README.md` for a real captured response.
 
-```json
-{
-  "trace_id": "uuid",
-  "query": "Can Mal offer a fixed-return savings account?",
-  "verdict": "NON_COMPLIANT",
-  "confidence": 0.86,
-  "summary": "A guaranteed fixed return on a deposit constitutes riba ...",
-  "findings": [
-    {
-      "issue": "riba",
-      "severity": "PROHIBITED",
-      "explanation": "...",
-      "citations": [
-        { "doc_id": "SFS-001", "section": "3.2", "title": "...", "quote": "..." }
-      ]
-    }
-  ],
-  "recommended_actions": ["Restructure as a Mudarabah profit-sharing account ..."],
-  "retrieved_chunks": [{ "chunk_id": "...", "score": 0.71, "doc_id": "SFS-001" }],
-  "model": "...",
-  "latency_ms": 4210
-}
-```
+**`/corpus` deliberately returns counts and identifiers only**, never bulk clause
+text — the standards are licensed, and a public endpoint should not serve them
+back. The plan did not consider this.
 
-Errors return the same envelope shape with an `error` object — never a bare string.
+Errors return the same envelope shape with an `error` object — never a bare
+string.
 
 ---
 
-## 8. Testing
+## 9. Testing — as built
 
-- **Chunking** — anchors survive, no chunk exceeds the token cap, overlap is correct
-- **Verdict rules** — table-driven across every finding-severity combination, including the
-  citation-stripped downgrade path
-- **Citation verifier** — fabricated chunk IDs are dropped and the verdict downgrades
-- **Graph end to end** — stubbed LLM and in-memory fake store, no network; asserts node
-  order and that the retry edge fires
-- **API contract** — `TestClient`; schema, status codes, `X-Trace-Id` header present
-- **Store contract** — the same test suite runs against both the Qdrant implementation and
-  the in-memory fake, so the protocol is genuinely honoured
-- **Retrieval smoke** — golden query/document pairs (for example, "fixed return deposit"
-  must retrieve SFS-001) to guard against embedding or chunking regressions
-- **Live smoke** — one opt-in test against the real OpenRouter and Qdrant endpoints, marked
-  and skipped by default so CI needs no credentials
+156 tests, ~8s, no network and no credentials. The in-memory store implements the
+same protocol as Qdrant, a deterministic hashing embedder stands in for the API,
+and the LLM is scripted.
 
-The in-memory fake store is what keeps the default suite fast and credential-free — no
-test outside the live-smoke marker touches the network.
+- **Chunking** — anchors survive, contextual prefixes are applied, no chunk
+  exceeds the cap
+- **Extraction (demo corpus only)** — document IDs read from the control table,
+  running headers stripped, clause numbering preserved, clauses rejoined across
+  page breaks. Note this exercises `pdf_loader.py`, **not** the AAOIFI extractor
+- **Verdict rules** — table-driven across every finding-severity combination,
+  including the citation-stripped downgrade path
+- **Citation verifier** — fabricated chunk IDs are dropped and the verdict
+  downgrades
+- **Graph end to end** — stubbed LLM and in-memory store; asserts node order and
+  that the retry edge fires exactly once
+- **API contract** — `TestClient`; schema, status codes, `X-Trace-Id`, and
+  `/health` reporting 503 honestly
+- **Store contract** — the same suite runs against both implementations
+- **Reranking** — reorders results, sees the breadcrumb, and **degrades rather
+  than fails** when the reranker raises or the transport errors
+
+**Divergence #5:** the planned "retrieval smoke tests" became a standalone eval
+set (`evals/golden_set.py`, 22 cases + 3 out-of-scope) run by
+`scripts/eval_retrieval.py`, outside pytest. Retrieval quality needed to be a
+*measurement comparable across configurations*, not a boolean gate — and it needs
+network access the offline suite deliberately avoids.
+
+Current: **recall 1.000, recall@1 0.909, MRR 0.924, precision 0.790**,
+out-of-scope max score 0.255 against a 0.35 threshold.
+
+**Not built:** the live smoke test against real endpoints, and
+`tests/test_aaoifi.py` — the highest-risk module is still exercised only
+indirectly.
 
 ---
 
-## 9. Phases
+## 10. Phases — all complete
 
-1. **Scaffold** — repo, git init, `requirements.txt`, `config.py`, `.env.example`, `.gitignore`
-2. **Corpus** — author the documents with stable section anchors
-3. **RAG pipeline** — OpenRouter embedder, chunker, store protocol with Qdrant and fake
-   implementations, ingest script, collection bootstrap
-4. **LLM client** — OpenRouter chat wrapper, fallback chain, defensive JSON parsing, repair retry
-5. **Agent** — state, the six nodes, deterministic verdict rules, graph wiring with retry edge
-6. **API** — FastAPI app, endpoints, error envelope, readiness check, lifespan warm-up
-7. **Observability** — JSON logging, trace contextvar, middleware, trace replay
-8. **Tests** — the suite above, green
-9. **Docker and deploy** — thin image, Render blueprint, env vars set in the dashboard, live URL
-10. **README** — setup, architecture diagram, curl examples, known limitations
+| # | Phase | Status |
+|---|---|---|
+| 1 | Scaffold — repo, requirements, config, `.env.example`, `.gitignore` | done |
+| 2 | Corpus | done — **replaced** by the real AAOIFI standards mid-build |
+| 3 | RAG pipeline — embedder, chunker, store protocol, ingest | done |
+| 4 | LLM client — fallback chain, defensive JSON parsing, repair retry | done |
+| 5 | Agent — state, six nodes, verdict rules, graph wiring | done |
+| 6 | API — endpoints, error envelope, readiness check, lifespan | done |
+| 7 | Observability — JSON logging, trace contextvar, middleware, replay | done |
+| 8 | Tests | done — 156 green |
+| 9 | Deploy | done — **native Python on Render**, not Docker |
+| 10 | README | done |
+| — | *Unplanned:* AAOIFI PDF extraction | done |
+| — | *Unplanned:* retrieval rebuild — grounding, RRF, reranking | done |
+| — | *Unplanned:* golden eval set and runner | done |
+| — | *Unplanned:* architecture & trade-offs document | done |
 
 ---
 
-## 10. Known limitations (to carry into the README)
+## 11. Known limitations
 
-- The corpus is **synthesized for demonstration**, not authentic AAOIFI text. Output is
-  decision support for a qualified reviewer, never a substitute for a Sharia board ruling.
-- Retrieval is limited to the ingested corpus. A question outside its coverage should return
-  `NEEDS_REVIEW`, and the corpus-coverage check is what enforces that.
-- Render's free tier spins down after 15 minutes idle, so the first request after an idle
-  period takes about a minute.
-- The Qdrant free cluster shares resources, so p99 retrieval latency can spike under load.
-  Retrieval adds a network round trip that an embedded store would not.
-- Two external dependencies are now on the request path (OpenRouter and Qdrant). Both are
-  wrapped with timeouts and retries, and `/health` reports readiness honestly.
-- There is no authentication on the public endpoint — it is a demonstration deployment.
-  Rate limiting is per-process only.
-- Secrets live in Render's environment settings and a local `.env`; `.env.example` documents
-  every variable and no real key is ever committed.
+Superseded by `README.md` § Known limitations and `DOCUMENTATION.md` §6, which
+are maintained. The plan's original list was written before the corpus changed
+and is no longer accurate — in particular, the corpus is **not** synthesised, and
+the first item below replaces it.
+
+- Output is **decision support for a qualified reviewer**, never a substitute for
+  a Sharia Supervisory Board ruling.
+- **Verdict quality is unmeasured.** Retrieval is measured; verdict correctness
+  is not, and needs a scholar-authored eval set.
+- Render's free tier spins down after 15 minutes idle, so the first request after
+  an idle period takes about 50s.
+- The Qdrant free cluster shares resources, so p99 retrieval latency can spike.
+- Three external calls are on the request path (chat, embeddings, rerank), all
+  through OpenRouter. Reranking degrades gracefully; the other two do not.
+- No authentication on the public endpoint — it is a demonstration deployment.
+- Secrets live in Render's environment settings and a local `.env`;
+  `.env.example` documents every variable and no real key is committed.
