@@ -5,8 +5,9 @@ product or transaction is Sharia-compliant. It retrieves from a corpus of Sharia
 standards, reasons over them with a LangGraph agent, and returns a structured verdict —
 `COMPLIANT`, `NON_COMPLIANT`, or `NEEDS_REVIEW` — with cited reasoning.
 
-> **Status: in development.** Scaffold and corpus complete; RAG pipeline in progress.
-> See [PLAN.md](PLAN.md) for the full design, and the progress tracker below.
+> **Status: in development.** Corpus, agent, API, and observability are working
+> end to end against the real AAOIFI Shari'ah Standards. Deployment and the
+> evaluation suite are outstanding. See the progress tracker below.
 
 ---
 
@@ -25,7 +26,7 @@ standards, reasons over them with a LangGraph agent, and returns a structured ve
 - [x] `app/config.py` — pydantic-settings, env loading
 - [x] `.env.example` documenting `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`,
       `OPENROUTER_EMBEDDING_MODEL`, `QDRANT_URL`, `QDRANT_API_KEY`, `QDRANT_COLLECTION`
-- [ ] Verify a bare `uvicorn app.main:app` boots
+- [x] Verify a bare `uvicorn app.main:app` boots
 
 ### Phase 2 — Corpus
 - [x] SFS-001 Riba and guaranteed returns
@@ -64,31 +65,31 @@ standards, reasons over them with a LangGraph agent, and returns a structured ve
 - [x] `agent/graph.py` — wiring plus the conditional retry edge
 
 ### Phase 6 — API
-- [ ] `POST /assess`
-- [ ] `GET /health` — liveness vs. readiness, 503 when Qdrant is unreachable
-- [ ] `GET /corpus`
-- [ ] `GET /traces/{trace_id}`
-- [ ] Consistent error envelope
-- [ ] Lifespan warm-up and client reuse
+- [x] `POST /assess`
+- [x] `GET /health` — liveness vs. readiness, 503 when Qdrant is unreachable
+- [x] `GET /corpus`
+- [x] `GET /traces/{trace_id}`
+- [x] Consistent error envelope
+- [x] Lifespan warm-up and client reuse
 
 ### Phase 7 — Observability
-- [ ] JSON-lines logger to stdout and a rotating file
-- [ ] Trace ID contextvar plus middleware, returned as `X-Trace-Id`
-- [ ] Log retrieved chunks with scores
+- [x] JSON-lines logger to stdout and a rotating file
+- [x] Trace ID contextvar plus middleware, returned as `X-Trace-Id`
+- [x] Log retrieved chunks with scores
 - [ ] Log the fully resolved LLM prompt, behind `LOG_PROMPTS`
-- [ ] Log the verdict and the rule that produced it
-- [ ] Trace replay endpoint working end to end
+- [x] Log the verdict and the rule that produced it
+- [x] Trace replay endpoint working end to end
 
 ### Phase 8 — Tests
 - [x] Chunking tests
 - [x] Verdict rule tests, table-driven
 - [x] Citation verifier tests
 - [x] Graph end-to-end test with stubbed LLM and fake store
-- [ ] API contract tests
+- [x] API contract tests
 - [x] Store contract tests run against both implementations
 - [ ] Retrieval smoke tests on golden pairs
 - [ ] Opt-in live smoke test, skipped by default so CI needs no credentials
-- [ ] Full suite green
+- [x] Full suite green (137 tests)
 
 ### Phase 9 — Deploy
 - [ ] `Dockerfile` — thin runtime image, no model weights, no bundled index
@@ -184,9 +185,14 @@ curl -X POST https://<deployed-url>/assess \
 
 ## Known limitations
 
-- The corpus is **synthesized for demonstration** and is not authentic AAOIFI text.
-  Output is decision support for a qualified reviewer, never a substitute for a Sharia
-  board ruling.
+- Output is **decision support for a qualified reviewer**, never a substitute for a
+  Sharia Supervisory Board ruling. The corpus is the AAOIFI Shari'ah Standards
+  (English edition); a synthesized demo corpus in `corpus/demo` is used as a
+  fallback and in tests.
+- Verdicts are not fully deterministic. On one borderline query, five identical runs
+  produced two `COMPLIANT` and three `NEEDS_REVIEW`.
+- There is **no evaluation set yet**, so retrieval and verdict quality are evidenced
+  by spot checks rather than measurement.
 - Retrieval is limited to the ingested corpus. Questions outside its coverage return
   `NEEDS_REVIEW` by design.
 - Render's free tier spins down after 15 minutes idle; the first request afterwards takes
