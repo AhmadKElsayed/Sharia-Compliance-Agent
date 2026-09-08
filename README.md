@@ -46,22 +46,22 @@ standards, reasons over them with a LangGraph agent, and returns a structured ve
 - [x] Confirm retrieval quality on golden queries
 
 ### Phase 4 — LLM client
-- [ ] `agent/llm.py` — OpenRouter chat client via the `openai` SDK
-- [ ] Model fallback chain for provider outages and retired models
-- [ ] Defensive JSON extraction with a single repair retry
-- [ ] Timeouts and retry with backoff
+- [x] `agent/llm.py` — OpenRouter chat client via the `openai` SDK
+- [x] Model fallback chain for provider outages and retired models
+- [x] Defensive JSON extraction with a single repair retry
+- [x] Timeouts and retry with backoff
 - [ ] In-process LRU cache keyed on the normalized query
 
 ### Phase 5 — Agent
-- [ ] `agent/state.py` — AgentState
-- [ ] `agent/prompts.py` — versioned prompt templates
-- [ ] Node: `parse_query`
-- [ ] Node: `plan_retrieval`
-- [ ] Node: `retrieve`
-- [ ] Node: `assess`
-- [ ] Node: `verify_citations`
-- [ ] Node: `decide_verdict` — deterministic rules
-- [ ] `agent/graph.py` — wiring plus the conditional retry edge
+- [x] `agent/state.py` — AgentState
+- [x] `agent/prompts.py` — versioned prompt templates
+- [x] Node: `parse_query`
+- [x] Node: `plan_retrieval`
+- [x] Node: `retrieve`
+- [x] Node: `assess`
+- [x] Node: `verify_citations`
+- [x] Node: `decide_verdict` — deterministic rules
+- [x] `agent/graph.py` — wiring plus the conditional retry edge
 
 ### Phase 6 — API
 - [ ] `POST /assess`
@@ -80,12 +80,12 @@ standards, reasons over them with a LangGraph agent, and returns a structured ve
 - [ ] Trace replay endpoint working end to end
 
 ### Phase 8 — Tests
-- [ ] Chunking tests
-- [ ] Verdict rule tests, table-driven
-- [ ] Citation verifier tests
-- [ ] Graph end-to-end test with stubbed LLM and fake store
+- [x] Chunking tests
+- [x] Verdict rule tests, table-driven
+- [x] Citation verifier tests
+- [x] Graph end-to-end test with stubbed LLM and fake store
 - [ ] API contract tests
-- [ ] Store contract tests run against both implementations
+- [x] Store contract tests run against both implementations
 - [ ] Retrieval smoke tests on golden pairs
 - [ ] Opt-in live smoke test, skipped by default so CI needs no credentials
 - [ ] Full suite green

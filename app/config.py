@@ -37,6 +37,20 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = 60.0
     llm_max_retries: int = 2
 
+    # OpenRouter routes a model across many providers whose throughput varies by
+    # an order of magnitude. Measured on this model: default routing gave
+    # 15.6 tok/s, throughput-sorted routing gave 130.3 tok/s. Empty disables the
+    # preference and uses OpenRouter's default routing.
+    openrouter_provider_sort: str = "throughput"
+
+    # The configured model is a reasoning model. Left enabled, its reasoning
+    # pass consumed the entire max_tokens budget (3072/3072 reasoning tokens,
+    # zero content) and the call returned nothing parseable. Both agent calls
+    # are structured extraction over supplied excerpts, where the reasoning pass
+    # bought nothing: disabling it took the assess call from 16s-to-failure down
+    # to 4.2s with correct output.
+    llm_reasoning_enabled: bool = False
+
     # --- Qdrant ------------------------------------------------------------
     qdrant_url: str = ""
     qdrant_api_key: str = ""
