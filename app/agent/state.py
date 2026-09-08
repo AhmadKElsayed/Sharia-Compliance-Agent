@@ -34,6 +34,7 @@ class AgentState(TypedDict, total=False):
     # retrieve
     hits: list[SearchHit]
     top_score: float
+    reranked: bool
 
     # assess
     findings: list[Finding]

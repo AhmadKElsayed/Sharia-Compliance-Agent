@@ -40,6 +40,17 @@ class SearchHit:
     text: str
     breadcrumb: str = ""
 
+    def embedding_context(self) -> str:
+        """Text handed to the reranker.
+
+        Includes the breadcrumb, so the cross-encoder sees which standard and
+        section a clause belongs to. AAOIFI clauses are elliptical, and the
+        lineage is often what makes relevance judgeable at all.
+        """
+        if not self.breadcrumb:
+            return self.text
+        return f"{self.breadcrumb}\n\n{self.text}"
+
     def to_log(self) -> dict[str, Any]:
         """Compact form for structured logs."""
         return {

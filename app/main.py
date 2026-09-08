@@ -54,6 +54,7 @@ _state: dict[str, Any] = {}
 def build_dependencies(settings: Settings) -> AgentDeps:
     """Construct the agent's collaborators from configuration."""
     from app.rag.ingest import build_embedder, build_store
+    from app.rag.rerank import OpenRouterReranker
 
     llm = LLMClient(
         api_key=settings.openrouter_api_key,
@@ -65,8 +66,20 @@ def build_dependencies(settings: Settings) -> AgentDeps:
         reasoning_effort=settings.llm_reasoning_effort,
         log_prompts=settings.log_prompts,
     )
+    reranker = (
+        OpenRouterReranker(
+            api_key=settings.openrouter_api_key,
+            model=settings.rerank_model,
+            base_url=settings.openrouter_base_url,
+            timeout=settings.llm_timeout_seconds,
+        )
+        if settings.rerank_enabled
+        else None
+    )
     return AgentDeps(
         llm=llm,
+        reranker=reranker,
+        rerank_candidates=settings.rerank_candidates,
         embedder=build_embedder(settings),
         store=build_store(settings),
         top_k=settings.retrieval_top_k,

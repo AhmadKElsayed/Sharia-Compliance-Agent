@@ -27,6 +27,7 @@ from app.agent.verdict import (
     verify_citations,
 )
 from app.rag.embedder import Embedder
+from app.rag.rerank import Reranker
 from app.rag.store import SearchHit, VectorStore
 
 log = logging.getLogger("sharia.agent")
@@ -60,6 +61,8 @@ class AgentDeps:
         top_k: int = 5,
         score_threshold: float = 0.35,
         max_tokens: int = 12000,
+        reranker: "Reranker | None" = None,
+        rerank_candidates: int = 24,
     ) -> None:
         self.llm = llm
         self.embedder = embedder
@@ -69,6 +72,9 @@ class AgentDeps:
         # Shared budget for both calls. It must cover the reasoning pass as well
         # as the answer; too small and the model returns empty content.
         self.max_tokens = max_tokens
+        # Optional; retrieval degrades to fused vector ordering without it.
+        self.reranker = reranker
+        self.rerank_candidates = rerank_candidates
 
 
 def _record_call(state: AgentState, node: str, response: Any) -> None:
@@ -231,10 +237,36 @@ def retrieve(state: AgentState, deps: AgentDeps) -> AgentState:
             if existing is None or hit.score > existing.score:
                 best[hit.chunk_id] = hit
 
-    ranked = [
+    candidates = [
         best[chunk_id]
         for chunk_id in sorted(fused, key=lambda c: (-fused[c], -best[c].score))
-    ][:MAX_EXCERPTS]
+    ]
+
+    # Rerank a wider pool than we finally use. Fusion fixes the comparability of
+    # scores across sub-queries but is still bi-encoder similarity underneath;
+    # a cross-encoder judges the query and clause together and is far better at
+    # telling a governing rule from text that merely reads like one.
+    ranked = candidates[:MAX_EXCERPTS]
+
+    if deps.reranker is not None and len(candidates) > 1:
+        pool = candidates[: deps.rerank_candidates]
+        try:
+            order = deps.reranker.rerank(
+                query=state["query"],
+                documents=[c.embedding_context() for c in pool],
+                top_n=MAX_EXCERPTS,
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Reranking is a quality improvement, never a dependency. The
+            # supplied ordering is already usable, so a failure here degrades
+            # the ranking rather than the assessment.
+            _error(state, f"rerank failed, using fused order: {exc}")
+            order = []
+
+        reordered = [pool[i] for i, _ in order if 0 <= i < len(pool)]
+        if reordered:
+            ranked = reordered
+            state["reranked"] = True
     state["hits"] = ranked
     state["top_score"] = ranked[0].score if ranked else 0.0
 

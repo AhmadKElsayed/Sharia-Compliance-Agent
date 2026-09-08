@@ -70,8 +70,25 @@ class Settings(BaseSettings):
     qdrant_timeout_seconds: float = 20.0
 
     # --- Retrieval ---------------------------------------------------------
-    retrieval_top_k: int = 5
+    # Candidates per sub-query. Raised from 5 to 10 together with reranking:
+    # measured on the golden set, neither change helps alone. A wider pool with
+    # no reranker leaves the extra candidates below the cutoff; a reranker over
+    # a narrow pool cannot promote a clause that never entered it. Together they
+    # took recall from 0.955 to 1.000 and MRR from 0.898 to 0.924.
+    retrieval_top_k: int = 10
     retrieval_score_threshold: float = 0.35
+
+    # Cross-encoder reranking over the fused candidates. Vector similarity is a
+    # bi-encoder approximation that never sees query and clause together; a
+    # cross-encoder does, and is the standard remedy for the case where
+    # similarity ranks generic text above the governing clause.
+    #
+    # Served by OpenRouter's /rerank endpoint, so no extra credential.
+    rerank_enabled: bool = True
+    rerank_model: str = "voyageai/rerank-2.5"
+    # Candidates gathered before reranking. Wider than the final excerpt count,
+    # since the point of reranking is to choose well from a larger pool.
+    rerank_candidates: int = 24
 
     # --- Observability -----------------------------------------------------
     log_level: str = "INFO"
