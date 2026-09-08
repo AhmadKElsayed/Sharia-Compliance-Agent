@@ -5,7 +5,7 @@ product or transaction is Sharia-compliant. It retrieves from a corpus of Sharia
 standards, reasons over them with a LangGraph agent, and returns a structured verdict —
 `COMPLIANT`, `NON_COMPLIANT`, or `NEEDS_REVIEW` — with cited reasoning.
 
-> **Status: in development.** Planning is complete; implementation has not started.
+> **Status: in development.** Scaffold and corpus complete; RAG pipeline in progress.
 > See [PLAN.md](PLAN.md) for the full design, and the progress tracker below.
 
 ---
@@ -20,25 +20,25 @@ standards, reasons over them with a LangGraph agent, and returns a structured ve
 - [x] Write this tracker
 
 ### Phase 1 — Scaffold
-- [ ] `git init`, `.gitignore`, initial commit
-- [ ] `requirements.txt` pinned for Python 3.11
-- [ ] `app/config.py` — pydantic-settings, env loading
-- [ ] `.env.example` documenting `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`,
+- [x] `git init`, `.gitignore`, initial commit
+- [x] `requirements.txt` pinned for Python 3.11
+- [x] `app/config.py` — pydantic-settings, env loading
+- [x] `.env.example` documenting `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`,
       `OPENROUTER_EMBEDDING_MODEL`, `QDRANT_URL`, `QDRANT_API_KEY`, `QDRANT_COLLECTION`
 - [ ] Verify a bare `uvicorn app.main:app` boots
 
 ### Phase 2 — Corpus
-- [ ] SFS-001 Riba and guaranteed returns
-- [ ] SFS-002 Murabaha
-- [ ] SFS-003 Ijarah
-- [ ] SFS-004 Gharar and maysir
-- [ ] SFS-005 Mudarabah and Musharakah
-- [ ] SFS-006 Sector and financial screening
-- [ ] Provenance header on every document (synthesized, not authentic AAOIFI text)
+- [x] SFS-001 Riba and guaranteed returns
+- [x] SFS-002 Murabaha
+- [x] SFS-003 Ijarah
+- [x] SFS-004 Gharar and maysir
+- [x] SFS-005 Mudarabah and Musharakah
+- [x] SFS-006 Sector and financial screening
+- [x] Provenance header on every document (synthesized, not authentic AAOIFI text)
 
 ### Phase 3 — RAG pipeline
 - [ ] `rag/embedder.py` — Embedder protocol, OpenRouter implementation with batching
-- [ ] `rag/chunking.py` — section-aware chunker preserving `§` anchors
+- [x] `rag/chunking.py` — section-aware chunker preserving `§` anchors
 - [ ] `rag/store.py` — VectorStore protocol, Qdrant implementation
 - [ ] `rag/store.py` — in-memory fake for credential-free tests
 - [ ] Collection bootstrap: 1536 dims, cosine, dimension-mismatch guard
