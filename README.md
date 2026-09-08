@@ -37,13 +37,13 @@ standards, reasons over them with a LangGraph agent, and returns a structured ve
 - [x] Provenance header on every document (synthesized, not authentic AAOIFI text)
 
 ### Phase 3 — RAG pipeline
-- [ ] `rag/embedder.py` — Embedder protocol, OpenRouter implementation with batching
+- [x] `rag/embedder.py` — Embedder protocol, OpenRouter implementation with batching
 - [x] `rag/chunking.py` — section-aware chunker preserving `§` anchors
-- [ ] `rag/store.py` — VectorStore protocol, Qdrant implementation
-- [ ] `rag/store.py` — in-memory fake for credential-free tests
-- [ ] Collection bootstrap: 1536 dims, cosine, dimension-mismatch guard
-- [ ] `rag/ingest.py` + `scripts/ingest.py` — idempotent upsert with deterministic IDs
-- [ ] Confirm retrieval quality on golden queries
+- [x] `rag/store.py` — VectorStore protocol, Qdrant implementation
+- [x] `rag/store.py` — in-memory fake for credential-free tests
+- [x] Collection bootstrap: 1536 dims, cosine, dimension-mismatch guard
+- [x] `rag/ingest.py` + `scripts/ingest.py` — idempotent upsert with deterministic IDs
+- [x] Confirm retrieval quality on golden queries
 
 ### Phase 4 — LLM client
 - [ ] `agent/llm.py` — OpenRouter chat client via the `openai` SDK
