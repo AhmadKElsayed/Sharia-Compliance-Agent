@@ -35,6 +35,15 @@ MAX_RETRIEVAL_ROUNDS = 2
 MAX_SUB_QUERIES = 4
 MAX_EXCERPTS = 8
 
+# Sub-queries shorter than this match generic clause language rather than a
+# topic, and their inflated scores crowd out correct results.
+MIN_SUB_QUERY_WORDS = 3
+
+# Reciprocal-rank-fusion constant. 60 is the value from the original RRF paper
+# and is deliberately large so that ranks 1-10 stay close together, letting
+# agreement across sub-queries matter more than a single top placement.
+RRF_K = 60
+
 
 class AgentDeps:
     """Collaborators the nodes need.
@@ -109,6 +118,26 @@ def parse_query(state: AgentState, deps: AgentDeps) -> AgentState:
 # --- 2. plan_retrieval ---------------------------------------------------
 
 
+def _ground(text: str, product: str, template: str = "{product} {text}") -> str:
+    """Attach the product type to a feature or concept, without repeating it.
+
+    Grounding is what made these sub-queries work: measured on a failing case,
+    "<product> <feature>" retrieved 4/5 relevant clauses where the bare feature
+    retrieved 0/5.
+
+    The product name is often already inside the extracted text, and blind
+    concatenation produced "Murabaha in Murabaha" and "savings account savings
+    account for depositors" -- wasted embedding calls retrieving the same thing
+    twice.
+    """
+    text = " ".join(text.split())
+    if not product:
+        return text
+    if set(product.lower().split()).issubset(set(text.lower().split())):
+        return text
+    return template.format(product=product, text=text)
+
+
 def plan_retrieval(state: AgentState, deps: AgentDeps) -> AgentState:
     """Derive targeted sub-queries from the parsed structure.
 
@@ -122,12 +151,24 @@ def plan_retrieval(state: AgentState, deps: AgentDeps) -> AgentState:
     state["retrieval_round"] = round_no
     query = state["query"]
 
+    product = (state.get("product_type") or "").strip()
+
     if round_no == 1:
+        # Sub-queries are grounded in the product rather than dressed in generic
+        # legal phrasing. Measured on a failing case: "<product> <feature>"
+        # returned 4/5 relevant clauses and "<concept> in <product>" 3/5, while
+        # the same feature alone, the bare concept, and the previous templates
+        # ("... permissibility ruling", "... definition and prohibition
+        # criteria") each returned 0/5.
+        #
+        # The templates were worse than useless. Generic legal phrasing matches
+        # generic clause language across the whole corpus, so it scored *higher*
+        # (0.55) than correct hits (0.42) while retrieving nothing relevant.
         sub: list[str] = [query]
         for feature in state.get("features", [])[:2]:
-            sub.append(f"{feature} permissibility ruling")
+            sub.append(_ground(feature, product))
         for concept in state.get("concepts", [])[:2]:
-            sub.append(f"{concept} definition and prohibition criteria")
+            sub.append(_ground(concept, product, template="{text} in {product}"))
     else:
         # Broadened pass: drop the specifics that failed and reach for the
         # general principles instead.
@@ -141,11 +182,18 @@ def plan_retrieval(state: AgentState, deps: AgentDeps) -> AgentState:
 
     deduped: list[str] = []
     for item in sub:
-        cleaned = item.strip()
+        cleaned = " ".join(item.split())
+        # A sub-query too thin to carry topic ends up matching generic clause
+        # language everywhere. One observed failure derived "Applies to
+        # depositors permissibility ruling" from a vague feature; it scored
+        # 0.56 against wholly irrelevant clauses and displaced correct hits.
+        if len(cleaned.split()) < MIN_SUB_QUERY_WORDS:
+            continue
         if cleaned and cleaned not in deduped:
             deduped.append(cleaned)
 
-    state["sub_queries"] = deduped[:MAX_SUB_QUERIES]
+    # The raw query is always kept, even if the filter emptied everything else.
+    state["sub_queries"] = deduped[:MAX_SUB_QUERIES] or [query]
     return state
 
 
@@ -157,6 +205,8 @@ def retrieve(state: AgentState, deps: AgentDeps) -> AgentState:
     _mark(state, "retrieve")
 
     best: dict[str, SearchHit] = {}
+    fused: dict[str, float] = {}
+
     for sub_query in state.get("sub_queries", []):
         try:
             vector = deps.embedder.embed_query(sub_query)
@@ -165,13 +215,26 @@ def retrieve(state: AgentState, deps: AgentDeps) -> AgentState:
             _error(state, f"retrieval failed for {sub_query!r}: {exc}")
             continue
 
-        for hit in hits:
-            # A chunk found by several sub-queries keeps its strongest score.
+        for rank, hit in enumerate(hits, start=1):
+            # Reciprocal rank fusion. Ordering by raw similarity across
+            # different sub-queries compares scores that are not on a common
+            # scale: measured on one failure, a vague sub-query scored 0.56 on
+            # irrelevant clauses while the user's own question scored 0.42 on
+            # the governing ones, so the wrong results displaced the right ones.
+            # Fusing on rank makes a sub-query's *ordering* count and its
+            # absolute scores irrelevant, so no single query can dominate.
+            fused[hit.chunk_id] = fused.get(hit.chunk_id, 0.0) + 1.0 / (RRF_K + rank)
+
+            # The raw similarity is still kept, for display and for the
+            # coverage threshold that decides NEEDS_REVIEW.
             existing = best.get(hit.chunk_id)
             if existing is None or hit.score > existing.score:
                 best[hit.chunk_id] = hit
 
-    ranked = sorted(best.values(), key=lambda h: h.score, reverse=True)[:MAX_EXCERPTS]
+    ranked = [
+        best[chunk_id]
+        for chunk_id in sorted(fused, key=lambda c: (-fused[c], -best[c].score))
+    ][:MAX_EXCERPTS]
     state["hits"] = ranked
     state["top_score"] = ranked[0].score if ranked else 0.0
 

@@ -231,3 +231,97 @@ def test_retrieval_hits_are_deduplicated(store_and_embedder) -> None:
     )
     ids = [h.chunk_id for h in run(deps)["hits"]]
     assert len(ids) == len(set(ids)), "a chunk matched by several sub-queries appears once"
+
+
+# --- retrieval planning and fusion ---------------------------------------
+
+
+def test_sub_queries_are_grounded_in_the_product() -> None:
+    """Grounding is what made retrieval work: on a measured failing case
+    "<product> <feature>" retrieved 4/5 relevant clauses where the bare feature
+    retrieved 0/5."""
+    from app.agent.nodes import _ground
+
+    assert _ground("guarantees a fixed 4% return", "savings account") == (
+        "savings account guarantees a fixed 4% return"
+    )
+    assert _ground("riba", "savings account", template="{text} in {product}") == (
+        "riba in savings account"
+    )
+
+
+def test_grounding_does_not_repeat_the_product() -> None:
+    """Blind concatenation produced "Murabaha in Murabaha" -- a wasted call."""
+    from app.agent.nodes import _ground
+
+    assert _ground("Murabaha", "Murabaha", template="{text} in {product}") == "Murabaha"
+    assert _ground("savings account for depositors", "savings account") == (
+        "savings account for depositors"
+    )
+    assert _ground("anything", "") == "anything"
+
+
+def test_degenerate_sub_queries_are_dropped(store_and_embedder) -> None:
+    """A two-word sub-query matches generic clause language everywhere."""
+    deps, _ = make_deps(
+        [
+            parse_payload(product_type="", features=["ok"], concepts=["x"]),
+            {"findings": [], "summary": "", "recommended_actions": []},
+        ],
+        store_and_embedder,
+    )
+    state = run(deps)
+    assert all(len(q.split()) >= 3 for q in state["sub_queries"])
+    assert state["sub_queries"], "the raw query must always survive filtering"
+
+
+def test_retrieval_uses_rank_fusion_not_raw_score(store_and_embedder) -> None:
+    """Raw scores are not comparable across sub-queries.
+
+    Measured on a real failure: a vague sub-query scored 0.56 on irrelevant
+    clauses while the user's own question scored 0.42 on the governing ones, so
+    max-score merging let the wrong results displace the right ones. Fusing on
+    rank makes a sub-query's ordering count and its absolute scores irrelevant.
+    """
+    from app.agent.nodes import AgentDeps, retrieve
+    from app.rag.store import SearchHit
+
+    def hit(cid: str, score: float) -> SearchHit:
+        return SearchHit(
+            chunk_id=cid, score=score, doc_id=cid, title="t", heading="h",
+            section_label="1", citation=cid, text="x",
+        )
+
+    class SplitStore:
+        """First sub-query returns the right answer at a low score; the second
+        returns junk at high scores."""
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def search(self, vector, top_k, score_threshold=None):  # noqa: ANN001
+            self.calls += 1
+            if self.calls == 1:
+                return [hit("RIGHT", 0.42), hit("also", 0.41)]
+            return [hit("JUNK-A", 0.56), hit("JUNK-B", 0.55), hit("RIGHT", 0.30)]
+
+    class OneVec:
+        dim = 4
+
+        def embed_query(self, text: str):  # noqa: ANN201
+            return [1.0, 0.0, 0.0, 0.0]
+
+        def embed_documents(self, texts):  # noqa: ANN001, ANN201
+            return [[1.0, 0.0, 0.0, 0.0] for _ in texts]
+
+    deps = AgentDeps(llm=None, embedder=OneVec(), store=SplitStore(), top_k=5)
+    state = {"sub_queries": ["query one here", "query two here"], "node_path": []}
+    retrieve(state, deps)
+
+    ids = [h.chunk_id for h in state["hits"]]
+    # RIGHT is rank 1 in one query and rank 3 in the other, so fusion promotes
+    # it above JUNK-A, which ranks first only once. Max-score merging would put
+    # JUNK-A first on its 0.56.
+    assert ids[0] == "RIGHT", f"rank fusion should promote RIGHT, got {ids}"
+    # The raw similarity is preserved for the coverage threshold.
+    assert state["hits"][0].score == 0.42
