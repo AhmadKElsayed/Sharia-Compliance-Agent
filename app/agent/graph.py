@@ -1,16 +1,20 @@
 """LangGraph wiring.
 
-    parse_query -> plan_retrieval -> retrieve -> [decision] -> assess
-                        ^                 |                      |
-                        +-- broaden ------+                      v
-                                                          verify_citations
-                                                                 |
-                                                                 v
-                                                          decide_verdict -> END
+    parse_query -> [in scope?] -> plan_retrieval -> retrieve -> [decision] -> assess
+         |                             ^                 |                      |
+         | out of scope                +-- broaden ------+                      v
+         |                                                            verify_citations
+         |                                                                     |
+         v                                                                     v
+    decide_verdict <-------------------------------------------------------- END
 
-The conditional edge after ``retrieve`` is what makes this a graph rather than a
-chain: a weak first pass loops back to ``plan_retrieval`` for one broadened
-attempt, and an out-of-scope query skips assessment entirely.
+Two conditional edges are what make this a graph rather than a chain.
+
+After ``parse_query``: an out-of-scope query goes straight to the verdict,
+skipping planning, embedding, search and reranking entirely.
+
+After ``retrieve``: a weak first pass loops back to ``plan_retrieval`` for one
+broadened attempt.
 """
 
 from __future__ import annotations
@@ -36,7 +40,18 @@ def build_graph(deps: AgentDeps):
     graph.add_node("decide_verdict", partial(nodes.decide_verdict, deps=deps))
 
     graph.set_entry_point("parse_query")
-    graph.add_edge("parse_query", "plan_retrieval")
+
+    # An out-of-scope query never reaches retrieval. parse_query already knows
+    # it is not about a financial product, so embedding, searching and reranking
+    # it spends money and sends the text to a second provider to learn nothing.
+    graph.add_conditional_edges(
+        "parse_query",
+        nodes.should_retrieve,
+        {
+            "plan_retrieval": "plan_retrieval",
+            "decide_verdict": "decide_verdict",
+        },
+    )
     graph.add_edge("plan_retrieval", "retrieve")
 
     graph.add_conditional_edges(

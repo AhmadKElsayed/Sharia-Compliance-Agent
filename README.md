@@ -102,8 +102,8 @@ flowchart TB
         D["6 · decide_verdict<br/><i>deterministic rules</i>"]
 
         P --> PL --> R
+        P -.->|"out of scope<br/>skip retrieval entirely"| D
         R -.->|"weak retrieval<br/>broaden, max 1 retry"| PL
-        R -.->|"out of scope"| D
         R --> A --> V --> D
     end
 
@@ -140,14 +140,25 @@ prohibited product; a false `NEEDS_REVIEW` costs a reviewer an hour. Every
 ambiguous path therefore resolves toward `NEEDS_REVIEW`, encoded in code rather
 than hoped for in a prompt.
 
-Two structures make it a graph rather than a chain:
+Three structures make it a graph rather than a chain:
 
+- **A scope short-circuit** — `parse_query` already knows whether the input
+  describes a financial product. If it does not, control goes straight to the
+  verdict, skipping planning, embedding, search and reranking. A greeting costs
+  1.6s and one LLM call instead of 4.9s, three network calls and a rerank charge.
 - **A conditional retry edge** — when the best retrieval score falls below
   threshold, control returns to `plan_retrieval`, which broadens the sub-queries
   and retrieves once more.
 - **A citation gate** — any citation not matching a retrieved chunk is stripped.
   A prohibition that loses all its citations is downgraded to `NEEDS_REVIEW`
   rather than convicting on fabricated evidence.
+
+The scope short-circuit is not only about latency. Retrieving for an
+already-rejected query sends its text to a second upstream provider for nothing
+(§5 Risk 1 in the trade-offs document), and it wrote plausible-looking but
+meaningless hits into the trace — a greeting retrieved Salam and Online Dealings
+clauses at a top score of 0.11, where they read as though they had been
+considered.
 
 ---
 
@@ -492,7 +503,7 @@ above; the pair takes recall from 0.955 to 1.000, and neither half helps alone.
 ## Testing
 
 ```bash
-pytest -q            # 161 tests, ~8s, no network, no credentials
+pytest -q            # 164 tests, ~8s, no network, no credentials
 ```
 
 The suite runs entirely offline: an in-memory vector store implements the same
@@ -543,7 +554,7 @@ corpus/
   source/              Markdown sources for the demo corpus
 evals/golden_set.py    66 cases: coverage, near-miss, adversarial
 scripts/               ingest.py, eval_retrieval.py, build_corpus_pdfs.py
-tests/                 161 tests
+tests/                 164 tests
 ```
 
 ---

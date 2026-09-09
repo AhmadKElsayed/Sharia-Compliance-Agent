@@ -1,7 +1,7 @@
 # Implementation Plan & Build Log — Sharia Compliance Agent
 
 **Status:** delivered. All ten phases complete, deployed at
-<https://sharia-compliance-agent.onrender.com>, 161 tests green.
+<https://sharia-compliance-agent.onrender.com>, 164 tests green.
 **Planned:** 2026-09-08 · **Completed:** 2026-09-09
 
 This document is kept as a record of what was planned and **where reality
@@ -138,7 +138,10 @@ a binding constraint, as expected.
                 +--------------------------------+
 
   1. parse_query        LLM #1: extract product structure and features,
-                        check scope. Rejects out-of-scope input early.
+                        check scope.
+                                |
+  1b.[conditional]      Out of scope? Straight to decide_verdict, skipping
+                        planning, embedding, search and reranking.
                                 |
   2. plan_retrieval     Derive 2-4 sub-queries, each grounded in the
                         product name (pure Python + templates).
@@ -202,6 +205,24 @@ between rows holds, the absolutes are a snapshot):
 Neither half helps alone. Shipped separately, either would have looked like a
 no-op and been reverted — which is the clearest argument in this project for
 building the eval set *before* tuning.
+
+### The scope short-circuit — the plan was right, the build was not
+
+The plan said `parse_query` "rejects out-of-scope input early". It did not. The
+scope check was implemented only inside `should_broaden`, the routing function
+attached to `retrieve`, so an out-of-scope query was embedded, searched and
+reranked before anything read the flag — the greeting reached the verdict with
+eight irrelevant clauses attached at a top score of 0.11.
+
+Fixed by adding the conditional edge the plan implied, after `parse_query`
+rather than after `retrieve`. A greeting now costs 1.6s and one LLM call instead
+of 4.9s, three network calls and a rerank charge.
+
+Recorded here rather than quietly patched because of what it says about reading
+one's own design: the sentence "rejects out-of-scope input early" appeared in the
+plan, in the graph docstring, and in the README, and was true of the *verdict*
+while being false of the *work done to reach it*. Nothing contradicted it, and no
+test asserted it, so it survived four rounds of documentation.
 
 ### Verdict rules — as built (divergence #6)
 
@@ -298,7 +319,7 @@ corpus/
   source/             Markdown sources for the demo corpus
 evals/golden_set.py   66 cases: coverage, near-miss, adversarial
 scripts/              ingest.py, eval_retrieval.py, build_corpus_pdfs.py
-tests/                161 tests
+tests/                164 tests
 requirements.txt      Runtime only
 requirements-ingest.txt   Adds PyMuPDF + ReportLab for offline extraction
 .env.example
@@ -389,7 +410,7 @@ string.
 
 ## 9. Testing — as built
 
-161 tests, ~8s, no network and no credentials. The in-memory store implements the
+164 tests, ~8s, no network and no credentials. The in-memory store implements the
 same protocol as Qdrant, a deterministic hashing embedder stands in for the API,
 and the LLM is scripted.
 

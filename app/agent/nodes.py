@@ -326,11 +326,36 @@ def retrieve(state: AgentState, deps: AgentDeps) -> AgentState:
     return state
 
 
+def should_retrieve(state: AgentState) -> str:
+    """Conditional edge: skip retrieval entirely for an out-of-scope query.
+
+    ``parse_query`` already knows the query is not about a financial product,
+    but the scope check used to live only in ``should_broaden``, one node too
+    late: a greeting was embedded, searched and *reranked* before anything
+    consulted the flag. Three reasons that was worth fixing beyond the ~1.3s.
+
+    The reranker bills for work already known to be pointless. The query text
+    reaches a second upstream provider after the system has decided it has no
+    business processing it, which is exactly the egress §5 Risk 1 is about. And
+    the nonsense hits were written into the trace and the logs — a greeting
+    retrieved Salam and Online Dealings clauses at a top score of 0.11 — where
+    they read as though they had been considered.
+
+    Returns the name of the next node.
+    """
+    if state.get("in_scope") is False:
+        return "decide_verdict"
+    return "plan_retrieval"
+
+
 def should_broaden(state: AgentState, deps: AgentDeps) -> str:
     """Conditional edge: retry retrieval once when the first pass is weak.
 
     Returns the name of the next node.
     """
+    # Retained as a guard rather than removed. ``should_retrieve`` now catches
+    # this before retrieval, but a node that decides a verdict's fate should not
+    # depend on an upstream edge having done its job.
     if state.get("in_scope") is False:
         return "decide_verdict"
 

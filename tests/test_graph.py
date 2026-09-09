@@ -459,3 +459,77 @@ def test_no_sub_queries_embeds_nothing() -> None:
 
     assert embedder.batch_calls == 0 and embedder.single_calls == 0
     assert state["hits"] == []
+
+
+# --- out-of-scope short-circuit -----------------------------------------
+#
+# parse_query already knows a greeting is not a financial product. The scope
+# check used to live only in should_broaden, one node too late, so the query was
+# embedded, searched and reranked before anything consulted the flag.
+
+
+class _NeverCalledEmbedder:
+    dim = 4
+
+    def embed_documents(self, texts):  # noqa: ANN001, ANN201
+        raise AssertionError("out-of-scope query must never be embedded")
+
+    def embed_query(self, text: str):  # noqa: ANN201
+        raise AssertionError("out-of-scope query must never be embedded")
+
+
+class _NeverCalledStore:
+    def search(self, vector, top_k, score_threshold=None):  # noqa: ANN001, ANN201
+        raise AssertionError("out-of-scope query must never be searched")
+
+
+class _NeverCalledReranker:
+    def rerank(self, query, documents, top_n):  # noqa: ANN001, ANN201
+        raise AssertionError("out-of-scope query must never be reranked")
+
+
+def test_out_of_scope_skips_retrieval_entirely() -> None:
+    """The expensive half is skipped, but so is the pointless half."""
+    from app.agent.graph import build_graph, initial_state
+    from app.agent.nodes import AgentDeps
+
+    llm = ScriptedLLM([{"in_scope": False, "summary": "a greeting", "features": [],
+                        "concepts": [], "product_type": ""}])
+    deps = AgentDeps(
+        llm=llm, embedder=_NeverCalledEmbedder(), store=_NeverCalledStore(),
+        top_k=5, reranker=_NeverCalledReranker(),
+    )
+    state = build_graph(deps).invoke(initial_state("hello there, how are you", "t-oos"))
+
+    assert state["node_path"] == ["parse_query", "decide_verdict"]
+    assert state["decision"].rule == "out_of_scope"
+    assert state["decision"].verdict == "NEEDS_REVIEW"
+    assert len(state["llm_calls"]) == 1, "only the parse call, never assess"
+
+
+def test_in_scope_still_reaches_retrieval(store_and_embedder) -> None:
+    """The short-circuit must not swallow real queries."""
+    from app.agent.graph import build_graph, initial_state
+    from app.agent.nodes import AgentDeps
+
+    store, embedder = store_and_embedder
+    llm = ScriptedLLM([
+        {"in_scope": True, "summary": "a deposit product", "product_type": "savings account",
+         "features": ["guaranteed return"], "concepts": ["riba"]},
+        {"findings": [], "open_questions": [], "recommended_actions": [], "summary": "s"},
+    ])
+    deps = AgentDeps(llm=llm, embedder=embedder, store=store, top_k=5)
+    state = build_graph(deps).invoke(
+        initial_state("can we guarantee a fixed return on deposits", "t-in")
+    )
+
+    assert "retrieve" in state["node_path"]
+
+
+def test_should_retrieve_routes_on_the_scope_flag() -> None:
+    from app.agent.nodes import should_retrieve
+
+    assert should_retrieve({"in_scope": False}) == "decide_verdict"
+    assert should_retrieve({"in_scope": True}) == "plan_retrieval"
+    # Absent flag means parse failed and degraded to in-scope; retrieve anyway.
+    assert should_retrieve({}) == "plan_retrieval"
