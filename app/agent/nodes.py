@@ -93,9 +93,37 @@ def _error(state: AgentState, message: str) -> None:
 
 # --- 1. parse_query ------------------------------------------------------
 
+# Intents the parse step can return. This node is the router: it classifies the
+# message and the conditional edge below acts on the classification.
+#
+# The LLM does the classifying rather than a keyword list. A word list was tried
+# first and rejected: it cannot cover greetings in other languages, transliterated
+# salutations, typos or informal phrasing without growing indefinitely, and every
+# word added widens the chance of swallowing a real query. The model already
+# reads this message for structure, so classification is free -- no extra call.
+INTENT_GREETING = "GREETING"
+INTENT_ASSESSMENT = "ASSESSMENT"
+INTENT_OTHER = "OTHER"
+VALID_INTENTS = frozenset({INTENT_GREETING, INTENT_ASSESSMENT, INTENT_OTHER})
+
+
+def _intent(parsed: dict[str, Any]) -> str:
+    """Read the classification, defaulting to the safe branch.
+
+    An unrecognised value routes to ASSESSMENT rather than GREETING. Treating an
+    unknown intent as a greeting would answer a real compliance question with a
+    welcome message; treating it as an assessment merely costs a retrieval.
+    """
+    value = str(parsed.get("intent", "") or "").strip().upper()
+    return value if value in VALID_INTENTS else INTENT_ASSESSMENT
+
 
 def parse_query(state: AgentState, deps: AgentDeps) -> AgentState:
-    """Extract product structure from the plain-English query."""
+    """Classify the message and extract product structure.
+
+    Doubles as the router: ``state["intent"]`` is what ``should_retrieve``
+    branches on.
+    """
     _mark(state, "parse_query")
 
     try:
@@ -105,15 +133,23 @@ def parse_query(state: AgentState, deps: AgentDeps) -> AgentState:
         _record_call(state, "parse_query", response)
     except LLMError as exc:
         # Without structure we can still retrieve on the raw query, so degrade
-        # rather than abort; the verdict rules will handle thin evidence.
+        # rather than abort; the verdict rules will handle thin evidence. The
+        # intent defaults to ASSESSMENT for the same reason: a failed classifier
+        # must not silently turn a compliance question into a welcome message.
         _error(state, f"parse_query failed: {exc}")
+        state["intent"] = INTENT_ASSESSMENT
         state["in_scope"] = True
         state["proposal_summary"] = state["query"]
         state["features"] = []
         state["concepts"] = []
         return state
 
-    state["in_scope"] = bool(parsed.get("in_scope", True))
+    intent = _intent(parsed)
+    state["intent"] = intent
+    # A greeting is never in scope, whatever the model put in the flag.
+    state["in_scope"] = intent == INTENT_ASSESSMENT and bool(
+        parsed.get("in_scope", True)
+    )
     state["product_type"] = str(parsed.get("product_type", "") or "")
     state["proposal_summary"] = str(parsed.get("summary", "") or state["query"])
     state["features"] = [str(f) for f in parsed.get("features", []) if str(f).strip()]
@@ -327,12 +363,14 @@ def retrieve(state: AgentState, deps: AgentDeps) -> AgentState:
 
 
 def should_retrieve(state: AgentState) -> str:
-    """Conditional edge: skip retrieval entirely for an out-of-scope query.
+    """Conditional edge: act on the intent ``parse_query`` classified.
 
-    ``parse_query`` already knows the query is not about a financial product,
-    but the scope check used to live only in ``should_broaden``, one node too
-    late: a greeting was embedded, searched and *reranked* before anything
-    consulted the flag. Three reasons that was worth fixing beyond the ~1.3s.
+    Only an ASSESSMENT reaches retrieval. A greeting and an off-topic question
+    both go straight to the verdict, where they get different answers.
+
+    The scope check used to live only in ``should_broaden``, one node too late:
+    the query was embedded, searched and *reranked* before anything consulted
+    the flag. Three reasons that was worth fixing beyond the ~1.3s.
 
     The reranker bills for work already known to be pointless. The query text
     reaches a second upstream provider after the system has decided it has no
@@ -343,6 +381,8 @@ def should_retrieve(state: AgentState) -> str:
 
     Returns the name of the next node.
     """
+    if state.get("intent") == INTENT_GREETING:
+        return "decide_verdict"
     if state.get("in_scope") is False:
         return "decide_verdict"
     return "plan_retrieval"
@@ -503,6 +543,7 @@ def decide_verdict(state: AgentState, deps: AgentDeps) -> AgentState:
         state.get("findings", []),
         state.get("top_score", 0.0),
         out_of_scope=state.get("in_scope") is False,
+        greeting=state.get("intent") == INTENT_GREETING,
         coverage_threshold=deps.score_threshold,
     )
     state["decision"] = decision

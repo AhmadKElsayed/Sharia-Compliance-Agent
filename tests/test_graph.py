@@ -493,13 +493,17 @@ def test_out_of_scope_skips_retrieval_entirely() -> None:
     from app.agent.graph import build_graph, initial_state
     from app.agent.nodes import AgentDeps
 
-    llm = ScriptedLLM([{"in_scope": False, "summary": "a greeting", "features": [],
-                        "concepts": [], "product_type": ""}])
+    # Deliberately a real off-topic *question*, not a greeting: greetings take
+    # the cheaper pre-LLM path, so using one here would test the wrong thing.
+    llm = ScriptedLLM([{"in_scope": False, "summary": "not a financial product",
+                        "features": [], "concepts": [], "product_type": ""}])
     deps = AgentDeps(
         llm=llm, embedder=_NeverCalledEmbedder(), store=_NeverCalledStore(),
         top_k=5, reranker=_NeverCalledReranker(),
     )
-    state = build_graph(deps).invoke(initial_state("hello there, how are you", "t-oos"))
+    state = build_graph(deps).invoke(
+        initial_state("what is the capital of France?", "t-oos")
+    )
 
     assert state["node_path"] == ["parse_query", "decide_verdict"]
     assert state["decision"].rule == "out_of_scope"
@@ -533,3 +537,151 @@ def test_should_retrieve_routes_on_the_scope_flag() -> None:
     assert should_retrieve({"in_scope": True}) == "plan_retrieval"
     # Absent flag means parse failed and degraded to in-scope; retrieve anyway.
     assert should_retrieve({}) == "plan_retrieval"
+
+
+# --- intent routing ------------------------------------------------------
+#
+# parse_query is the router: it classifies the message and should_retrieve acts
+# on the classification. Only ASSESSMENT reaches retrieval. Greetings and
+# off-topic questions both stop at the verdict, with different answers.
+
+
+def _parsed(intent: str, **extra) -> dict:  # noqa: ANN003
+    base = {"intent": intent, "in_scope": intent == "ASSESSMENT",
+            "summary": "s", "product_type": "", "features": [], "concepts": []}
+    base.update(extra)
+    return base
+
+
+def _routing_deps(intent: str):  # noqa: ANN202
+    from app.agent.nodes import AgentDeps
+
+    return AgentDeps(
+        llm=ScriptedLLM([_parsed(intent)]),
+        embedder=_NeverCalledEmbedder(), store=_NeverCalledStore(),
+        top_k=5, reranker=_NeverCalledReranker(),
+    )
+
+
+def test_greeting_skips_retrieval_and_gets_a_welcome() -> None:
+    from app.agent.graph import build_graph, initial_state
+
+    state = build_graph(_routing_deps("GREETING")).invoke(initial_state("Hi", "t-g"))
+
+    assert state["node_path"] == ["parse_query", "decide_verdict"]
+    assert state["decision"].rule == "greeting"
+    assert state["decision"].confidence == 0.0
+    assert "Sharia-compliant" in state["decision"].rationale
+    assert len(state["llm_calls"]) == 1, "the router call only, never assess"
+
+
+def test_off_topic_skips_retrieval_but_is_not_greeted() -> None:
+    """Both short-circuit; they must not give the same answer."""
+    from app.agent.graph import build_graph, initial_state
+
+    state = build_graph(_routing_deps("OTHER")).invoke(
+        initial_state("what is the capital of France?", "t-o")
+    )
+
+    assert state["node_path"] == ["parse_query", "decide_verdict"]
+    assert state["decision"].rule == "out_of_scope"
+    assert "Sharia-compliant" not in state["decision"].rationale
+
+
+def test_assessment_still_reaches_retrieval(store_and_embedder) -> None:
+    from app.agent.graph import build_graph, initial_state
+    from app.agent.nodes import AgentDeps
+
+    store, embedder = store_and_embedder
+    llm = ScriptedLLM([
+        _parsed("ASSESSMENT", product_type="savings account",
+                features=["guaranteed return"], concepts=["riba"]),
+        {"findings": [], "open_questions": [], "recommended_actions": [], "summary": "s"},
+    ])
+    deps = AgentDeps(llm=llm, embedder=embedder, store=store, top_k=5)
+    state = build_graph(deps).invoke(
+        initial_state("can we guarantee a fixed return on deposits", "t-a")
+    )
+
+    assert "retrieve" in state["node_path"]
+
+
+def test_a_greeting_with_a_question_attached_is_an_assessment(store_and_embedder) -> None:
+    """The failure mode that killed the keyword approach.
+
+    "Hi, can we guarantee a fixed return?" must reach retrieval. The prompt says
+    a message containing any question is never GREETING; this pins the routing
+    behaviour so a prompt edit cannot silently regress it.
+    """
+    from app.agent.graph import build_graph, initial_state
+    from app.agent.nodes import AgentDeps
+
+    store, embedder = store_and_embedder
+    llm = ScriptedLLM([
+        _parsed("ASSESSMENT", product_type="savings account",
+                features=["guaranteed return"], concepts=["riba"]),
+        {"findings": [], "open_questions": [], "recommended_actions": [], "summary": "s"},
+    ])
+    deps = AgentDeps(llm=llm, embedder=embedder, store=store, top_k=5)
+    state = build_graph(deps).invoke(
+        initial_state("Hi, can we guarantee a fixed return?", "t-mixed")
+    )
+
+    assert "retrieve" in state["node_path"]
+    assert state["decision"].rule != "greeting"
+
+
+def test_unknown_intent_is_treated_as_an_assessment() -> None:
+    """Fail toward doing the work, never toward greeting a real question."""
+    from app.agent.nodes import _intent
+
+    assert _intent({"intent": "GREETING"}) == "GREETING"
+    assert _intent({"intent": "greeting"}) == "GREETING", "case-insensitive"
+    assert _intent({"intent": "OTHER"}) == "OTHER"
+    assert _intent({"intent": "CHITCHAT"}) == "ASSESSMENT", "unknown label"
+    assert _intent({}) == "ASSESSMENT", "absent"
+    assert _intent({"intent": None}) == "ASSESSMENT", "null"
+
+
+def test_greeting_intent_overrides_a_contradictory_scope_flag() -> None:
+    """The model can emit intent=GREETING with in_scope=true. Intent wins."""
+    from app.agent.graph import build_graph, initial_state
+    from app.agent.nodes import AgentDeps
+
+    llm = ScriptedLLM([{"intent": "GREETING", "in_scope": True, "summary": "hi",
+                        "product_type": "", "features": [], "concepts": []}])
+    deps = AgentDeps(
+        llm=llm, embedder=_NeverCalledEmbedder(), store=_NeverCalledStore(), top_k=5,
+    )
+    state = build_graph(deps).invoke(initial_state("Hello", "t-conflict"))
+
+    assert state["in_scope"] is False
+    assert state["decision"].rule == "greeting"
+
+
+def test_a_failed_router_call_still_assesses(store_and_embedder) -> None:
+    """A classifier outage must not turn compliance questions into greetings."""
+    from app.agent.graph import build_graph, initial_state
+    from app.agent.llm import LLMError
+    from app.agent.nodes import AgentDeps
+
+    store, embedder = store_and_embedder
+
+    class FailingThenWorking:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_json(self, *a, **k):  # noqa: ANN002, ANN003, ANN201
+            self.calls += 1
+            if self.calls == 1:
+                raise LLMError("classifier down")
+            return ({"findings": [], "open_questions": [],
+                     "recommended_actions": [], "summary": "s"},
+                    SimpleNamespace(to_log=lambda include_content=False: {}))
+
+    deps = AgentDeps(llm=FailingThenWorking(), embedder=embedder, store=store, top_k=5)
+    state = build_graph(deps).invoke(initial_state("is murabaha permissible", "t-fail"))
+
+    assert state["intent"] == "ASSESSMENT"
+    assert "retrieve" in state["node_path"]
+    assert state["decision"].rule != "greeting"

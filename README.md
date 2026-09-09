@@ -94,7 +94,7 @@ flowchart TB
 
     subgraph G["LangGraph StateGraph"]
         direction TB
-        P["1 · parse_query<br/><i>LLM call 1 — extract structure</i>"]
+        P["1 · parse_query<br/><i>LLM call 1 — classify intent + extract structure</i>"]
         PL["2 · plan_retrieval<br/><i>derive 2–4 sub-queries</i>"]
         R["3 · retrieve<br/><i>embed, search, RRF fuse, rerank</i>"]
         A["4 · assess<br/><i>LLM call 2 — findings + citations</i>"]
@@ -102,7 +102,7 @@ flowchart TB
         D["6 · decide_verdict<br/><i>deterministic rules</i>"]
 
         P --> PL --> R
-        P -.->|"out of scope<br/>skip retrieval entirely"| D
+        P -.->|"greeting / off-topic<br/>skip retrieval entirely"| D
         R -.->|"weak retrieval<br/>broaden, max 1 retry"| PL
         R --> A --> V --> D
     end
@@ -142,10 +142,11 @@ than hoped for in a prompt.
 
 Three structures make it a graph rather than a chain:
 
-- **A scope short-circuit** — `parse_query` already knows whether the input
-  describes a financial product. If it does not, control goes straight to the
-  verdict, skipping planning, embedding, search and reranking. A greeting costs
-  1.6s and one LLM call instead of 4.9s, three network calls and a rerank charge.
+- **An intent router** — `parse_query` classifies every message as `GREETING`,
+  `ASSESSMENT` or `OTHER`, and only an `ASSESSMENT` reaches retrieval. A greeting
+  gets a short welcome; an off-topic question gets a "not covered by this corpus"
+  answer; neither is embedded, searched or reranked. The classification rides on
+  the parse call that already runs, so it costs no extra request.
 - **A conditional retry edge** — when the best retrieval score falls below
   threshold, control returns to `plan_retrieval`, which broadens the sub-queries
   and retrieves once more.
@@ -153,12 +154,20 @@ Three structures make it a graph rather than a chain:
   A prohibition that loses all its citations is downgraded to `NEEDS_REVIEW`
   rather than convicting on fabricated evidence.
 
-The scope short-circuit is not only about latency. Retrieving for an
-already-rejected query sends its text to a second upstream provider for nothing
-(§5 Risk 1 in the trade-offs document), and it wrote plausible-looking but
-meaningless hits into the trace — a greeting retrieved Salam and Online Dealings
-clauses at a top score of 0.11, where they read as though they had been
-considered.
+The router is an LLM rather than a keyword list. A word list was tried first and
+rejected: it cannot cover other languages, transliterated salutations, typos or
+informal phrasing without growing indefinitely, and each word added widens the
+chance of swallowing a real query. The model handles `merhaba` and
+`"hows it going mate"` while still routing `"Hi, can we guarantee a fixed
+return?"` to a full assessment. An unrecognised label falls back to
+`ASSESSMENT` — greeting a real compliance question is the costly direction to
+fail in.
+
+Skipping retrieval is not only about latency. Retrieving for an already-rejected
+message sends its text to a second upstream provider for nothing (§5 Risk 1 in
+the trade-offs document), and it wrote plausible-looking but meaningless hits
+into the trace — a greeting retrieved Salam and Online Dealings clauses at a top
+score of 0.11, where they read as though they had been considered.
 
 ---
 
@@ -503,7 +512,7 @@ above; the pair takes recall from 0.955 to 1.000, and neither half helps alone.
 ## Testing
 
 ```bash
-pytest -q            # 164 tests, ~8s, no network, no credentials
+pytest -q            # 171 tests, ~8s, no network, no credentials
 ```
 
 The suite runs entirely offline: an in-memory vector store implements the same
@@ -554,7 +563,7 @@ corpus/
   source/              Markdown sources for the demo corpus
 evals/golden_set.py    66 cases: coverage, near-miss, adversarial
 scripts/               ingest.py, eval_retrieval.py, build_corpus_pdfs.py
-tests/                 164 tests
+tests/                 171 tests
 ```
 
 ---

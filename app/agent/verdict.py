@@ -108,11 +108,20 @@ class VerdictDecision:
 COVERAGE_THRESHOLD = 0.35
 
 
+GREETING_REPLY = (
+    "Hello. I assess whether a proposed financial product or transaction is "
+    "Sharia-compliant, against the AAOIFI Shari'ah Standards. Describe a product "
+    "and I will review it — for example: \"Can we offer a savings account paying "
+    "a fixed 4% annual return?\""
+)
+
+
 def decide(
     findings: list[Finding],
     top_score: float,
     *,
     out_of_scope: bool = False,
+    greeting: bool = False,
     coverage_threshold: float = COVERAGE_THRESHOLD,
 ) -> VerdictDecision:
     """Aggregate findings into a verdict.
@@ -120,6 +129,19 @@ def decide(
     Rules are evaluated in order; the first match wins, and the rule name is
     recorded so a reviewer can see exactly why the verdict came out as it did.
     """
+    if greeting:
+        # A greeting is not an assessment, and saying "the corpus does not cover
+        # this" to someone who said hello is a non-answer. It keeps the
+        # NEEDS_REVIEW label because the response schema requires one of the
+        # three verdicts, and inventing a fourth would break every client; the
+        # rule name and rationale are what carry the real meaning here.
+        return VerdictDecision(
+            Verdict.NEEDS_REVIEW,
+            "greeting",
+            GREETING_REPLY,
+            0.0,
+        )
+
     if out_of_scope:
         return VerdictDecision(
             Verdict.NEEDS_REVIEW,

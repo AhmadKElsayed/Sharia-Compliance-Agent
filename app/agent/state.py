@@ -20,6 +20,9 @@ class AgentState(TypedDict, total=False):
     trace_id: str
 
     # parse_query
+    # "greeting" when the input is only a hello, set without an LLM call.
+    # Absent for everything else, which is the ordinary assessment path.
+    intent: str
     in_scope: bool
     product_type: str
     proposal_summary: str
