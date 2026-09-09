@@ -1,7 +1,7 @@
 # Sharia Compliance Agent
 
 An AI agent that assesses whether a proposed financial product or transaction is
-Sharia-compliant, returning a structured verdict — `COMPLIANT`, `NON_COMPLIANT`,
+Sharia-compliant, returning a structured verdict — `COMPLIANT`, `NON_COMPLIANT`
 or `NEEDS_REVIEW` — grounded in cited clauses from the AAOIFI *Shari'ah
 Standards*.
 
@@ -143,10 +143,10 @@ than hoped for in a prompt.
 Three structures make it a graph rather than a chain:
 
 - **An intent router** — `parse_query` classifies every message as `GREETING`,
-  `ASSESSMENT` or `OTHER`, and only an `ASSESSMENT` reaches retrieval. A greeting
-  gets a short welcome; an off-topic question gets a "not covered by this corpus"
-  answer; neither is embedded, searched or reranked. The classification rides on
-  the parse call that already runs, so it costs no extra request.
+  `ASSESSMENT` or `OTHER`, and only an `ASSESSMENT` reaches retrieval. The other
+  two return `IRRELEVANT` and are never embedded, searched or reranked. The
+  classification rides on the parse call that already runs, so it costs no extra
+  request.
 - **A conditional retry edge** — when the best retrieval score falls below
   threshold, control returns to `plan_retrieval`, which broadens the sub-queries
   and retrieves once more.
@@ -168,6 +168,23 @@ message sends its text to a second upstream provider for nothing (§5 Risk 1 in
 the trade-offs document), and it wrote plausible-looking but meaningless hits
 into the trace — a greeting retrieved Salam and Online Dealings clauses at a top
 score of 0.11, where they read as though they had been considered.
+
+### Verdicts
+
+| Verdict | Meaning |
+|---|---|
+| `COMPLIANT` | Every identified issue is supported by a clause permitting the structure |
+| `NON_COMPLIANT` | A prohibition applies, with a citation that survived verification |
+| `NEEDS_REVIEW` | A real product question a reviewer must settle — conditional, unresolved, or beyond the corpus |
+| `IRRELEVANT` | **Not an assessment.** A greeting or an off-topic message; nothing was retrieved and nothing was judged |
+
+`IRRELEVANT` exists because folding these into `NEEDS_REVIEW` told a reviewer
+that a greeting required their attention, and put greetings in the same bucket as
+genuinely borderline products — the population a reviewer actually works from.
+The brief names three verdicts, and those three remain the only *assessment*
+outcomes; `IRRELEVANT` says no assessment happened. Responses carrying it also
+drop the standard disclaimer, which would otherwise claim an assessment was
+generated from retrieved standards text when none was.
 
 ---
 
@@ -512,7 +529,7 @@ above; the pair takes recall from 0.955 to 1.000, and neither half helps alone.
 ## Testing
 
 ```bash
-pytest -q            # 171 tests, ~8s, no network, no credentials
+pytest -q            # 174 tests, ~8s, no network, no credentials
 ```
 
 The suite runs entirely offline: an in-memory vector store implements the same
@@ -563,7 +580,7 @@ corpus/
   source/              Markdown sources for the demo corpus
 evals/golden_set.py    66 cases: coverage, near-miss, adversarial
 scripts/               ingest.py, eval_retrieval.py, build_corpus_pdfs.py
-tests/                 171 tests
+tests/                 174 tests
 ```
 
 ---

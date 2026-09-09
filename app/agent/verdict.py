@@ -21,6 +21,17 @@ class Verdict(StrEnum):
     NON_COMPLIANT = "NON_COMPLIANT"
     NEEDS_REVIEW = "NEEDS_REVIEW"
 
+    IRRELEVANT = "IRRELEVANT"
+    """No assessment was performed: the message was not a compliance question.
+
+    The brief names three verdicts, and these remain the only three *assessment*
+    outcomes. IRRELEVANT is not a fourth judgement of a product — it says no
+    product was judged. Folding this case into NEEDS_REVIEW was worse than a
+    schema addition: it told a reviewer that a greeting required their attention,
+    and it put greetings into the same bucket as genuinely borderline products,
+    which is exactly the population a reviewer works from.
+    """
+
 
 class Severity(StrEnum):
     """How a single finding bears on the overall verdict."""
@@ -130,13 +141,8 @@ def decide(
     recorded so a reviewer can see exactly why the verdict came out as it did.
     """
     if greeting:
-        # A greeting is not an assessment, and saying "the corpus does not cover
-        # this" to someone who said hello is a non-answer. It keeps the
-        # NEEDS_REVIEW label because the response schema requires one of the
-        # three verdicts, and inventing a fourth would break every client; the
-        # rule name and rationale are what carry the real meaning here.
         return VerdictDecision(
-            Verdict.NEEDS_REVIEW,
+            Verdict.IRRELEVANT,
             "greeting",
             GREETING_REPLY,
             0.0,
@@ -144,11 +150,13 @@ def decide(
 
     if out_of_scope:
         return VerdictDecision(
-            Verdict.NEEDS_REVIEW,
+            Verdict.IRRELEVANT,
             "out_of_scope",
-            "The query does not describe a financial product or transaction that "
-            "this corpus covers.",
-            0.2,
+            "This is not a question about a financial product or transaction, so "
+            "no compliance assessment was performed. Describe a product or "
+            "transaction and I will review it against the AAOIFI Shari'ah "
+            "Standards.",
+            0.0,
         )
 
     if top_score < coverage_threshold:

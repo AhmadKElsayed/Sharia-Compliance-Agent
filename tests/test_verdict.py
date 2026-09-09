@@ -91,9 +91,43 @@ def test_unresolved_outranks_conditional() -> None:
 
 
 def test_out_of_scope_short_circuits() -> None:
+    """IRRELEVANT, not NEEDS_REVIEW: nothing was assessed, so nothing needs review.
+
+    Note this wins even over a PROHIBITED finding. If the message was not a
+    compliance question, any finding attached to it is an artefact.
+    """
     decision = decide([finding(Severity.PROHIBITED)], STRONG, out_of_scope=True)
-    assert decision.verdict is Verdict.NEEDS_REVIEW
+    assert decision.verdict is Verdict.IRRELEVANT
     assert decision.rule == "out_of_scope"
+
+
+def test_greeting_is_irrelevant_not_a_verdict() -> None:
+    decision = decide([], 0.0, greeting=True)
+    assert decision.verdict is Verdict.IRRELEVANT
+    assert decision.rule == "greeting"
+    assert decision.confidence == 0.0
+
+
+def test_irrelevant_never_reaches_a_real_verdict() -> None:
+    """The three assessment outcomes stay reserved for actual assessments."""
+    for decision in (
+        decide([], 0.0, greeting=True),
+        decide([finding(Severity.PROHIBITED)], STRONG, out_of_scope=True),
+    ):
+        assert decision.verdict not in (
+            Verdict.COMPLIANT, Verdict.NON_COMPLIANT, Verdict.NEEDS_REVIEW
+        ), decision.rule
+
+
+def test_weak_coverage_is_still_needs_review_not_irrelevant() -> None:
+    """A real product question the corpus cannot answer is not irrelevant.
+
+    This is the distinction IRRELEVANT must not blur: the question was valid and
+    a reviewer genuinely should look at it.
+    """
+    decision = decide([finding(Severity.PERMISSIBLE)], top_score=0.16)
+    assert decision.verdict is Verdict.NEEDS_REVIEW
+    assert decision.rule == "insufficient_corpus_coverage"
 
 
 def test_weak_retrieval_forces_review_even_with_findings() -> None:

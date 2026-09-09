@@ -53,7 +53,9 @@ class RetrievedChunkOut(BaseModel):
 class AssessResponse(BaseModel):
     trace_id: str
     query: str
-    verdict: Literal["COMPLIANT", "NON_COMPLIANT", "NEEDS_REVIEW"]
+    verdict: Literal["COMPLIANT", "NON_COMPLIANT", "NEEDS_REVIEW", "IRRELEVANT"]
+    """The three assessment outcomes, plus IRRELEVANT when the message was not a
+    compliance question at all and nothing was assessed."""
     confidence: float = Field(
         ge=0.0, le=1.0,
         description="Support for the verdict. A coarse signal, not a probability.",
@@ -128,6 +130,13 @@ DISCLAIMER = (
     "approval."
 )
 
+# An IRRELEVANT response assessed nothing, so the standard disclaimer would be a
+# false statement about it -- there is no retrieved standards text behind a
+# greeting, and telling a reviewer to review one wastes their attention.
+NO_ASSESSMENT_NOTE = (
+    "No compliance assessment was performed for this message."
+)
+
 
 def to_assess_response(
     state: AgentState, trace_id: str, latency_ms: int
@@ -176,5 +185,9 @@ def to_assess_response(
         rejected_citations=state.get("rejected_citations") or [],
         model=(llm_calls[-1].get("model", "") if llm_calls else ""),
         latency_ms=latency_ms,
-        disclaimer=DISCLAIMER,
+        disclaimer=(
+            NO_ASSESSMENT_NOTE
+            if decision.verdict == Verdict.IRRELEVANT
+            else DISCLAIMER
+        ),
     )

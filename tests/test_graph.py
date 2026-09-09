@@ -145,9 +145,10 @@ def test_out_of_scope_skips_assessment(store_and_embedder) -> None:
     deps, llm = make_deps([parse_payload(in_scope=False)], store_and_embedder)
     state = run(deps, "What is the weather in Cairo?")
 
-    assert state["decision"].verdict is Verdict.NEEDS_REVIEW
+    assert state["decision"].verdict is Verdict.IRRELEVANT
     assert state["decision"].rule == "out_of_scope"
     assert "assess" not in state["node_path"]
+    assert "retrieve" not in state["node_path"], "nor is it retrieved"
     assert len(llm.calls) == 1, "no assessment call for an out-of-scope query"
 
 
@@ -507,7 +508,7 @@ def test_out_of_scope_skips_retrieval_entirely() -> None:
 
     assert state["node_path"] == ["parse_query", "decide_verdict"]
     assert state["decision"].rule == "out_of_scope"
-    assert state["decision"].verdict == "NEEDS_REVIEW"
+    assert state["decision"].verdict == "IRRELEVANT"
     assert len(state["llm_calls"]) == 1, "only the parse call, never assess"
 
 
