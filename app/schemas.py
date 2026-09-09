@@ -20,15 +20,9 @@ class AssessRequest(BaseModel):
         min_length=3,
         max_length=4000,
         description="Plain-English description of the proposed product or transaction.",
-        # The first case in the golden retrieval set, and the query whose silent
-        # failure motivated building that set. It is the default here because it
-        # exercises the whole pipeline honestly: it names a concrete rate, so
-        # parse_query has real structure to extract, and it returns a decisive
-        # NON_COMPLIANT citing SS-40 rather than a hedge, so a reader trying the
-        # endpoint sees what the system is actually for.
         examples=[
-            "Can Mal offer a savings account guaranteeing depositors a fixed 4% "
-            "annual return?"
+            "How should profit be shared between the bank and depositors in a "
+            "Mudarabah account?"
         ],
     )
 
