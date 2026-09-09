@@ -20,10 +20,7 @@ class AssessRequest(BaseModel):
         min_length=3,
         max_length=4000,
         description="Plain-English description of the proposed product or transaction.",
-        examples=[
-            "How should profit be shared between the bank and depositors in a "
-            "Mudarabah account?"
-        ],
+        examples=["Is it permissible to sell an asset in Murabaha before the bank owns it?"],
     )
 
 
