@@ -205,6 +205,11 @@ pip install -r requirements-ingest.txt   # runtime + PDF extraction
 cp .env.example .env                     # then fill in your keys
 ```
 
+Download the licensed corpus from
+<https://aaoifi.com/shariah-standards-3/?lang=en> and save the English edition as
+`corpus/pdf/Shariaa-Standards-ENG.pdf`. Skip this to run against the bundled demo
+corpus instead.
+
 Build the vector index (once, ~30 seconds, about $0.02 in embeddings):
 
 ```bash
@@ -368,9 +373,18 @@ ones — a duplicated PDF text layer, six standards with inconsistent heading
 formats, and 336 numbered lines that are section headings rather than rules (see
 [Extraction](#extraction)).
 
-The source PDFs live in [corpus/pdf/](corpus/pdf/). A small synthesised corpus
-is kept in [corpus/demo/](corpus/demo/) so the test suite and a fresh clone run
-without them.
+**Getting the corpus.** The standards are commercially licensed, so the PDFs are
+not redistributed here. Download the English (and optionally Arabic) edition from
+the publisher — <https://aaoifi.com/shariah-standards-3/?lang=en> — and place it
+at:
+
+```
+corpus/pdf/Shariaa-Standards-ENG.pdf
+```
+
+`scripts/ingest.py` picks it up automatically. Without it, ingest falls back to
+the small synthesised corpus in [corpus/demo/](corpus/demo/), so a fresh clone
+and the test suite both still run.
 
 ### Chunking
 
@@ -665,7 +679,7 @@ app/
     logging_setup.py   JSON-lines logging
     traces.py          Bounded trace store for replay
 corpus/
-  pdf/                 The real AAOIFI Shari'ah Standards (EN + AR)
+  pdf/                 Where you place the licensed AAOIFI PDFs (git-ignored)
   demo/                Synthesised corpus, so a clone runs without them
   source/              Markdown sources for the demo corpus
 evals/golden_set.py    66 cases: coverage, near-miss, adversarial

@@ -25,3 +25,8 @@ Thumbs.db
 
 # Working document, held back from the repo for now.
 DOCUMENTATION.md
+
+# Licensed AAOIFI source PDFs. Obtain them from the publisher:
+#   https://aaoifi.com/shariah-standards-3/?lang=en
+# See README "Corpus" for where to put them.
+corpus/pdf/*.pdf

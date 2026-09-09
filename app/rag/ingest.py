@@ -20,8 +20,9 @@ from app.rag.store import QdrantStore, VectorStore
 CORPUS_DIR = Path(__file__).resolve().parents[2] / "corpus" / "pdf"
 
 # The AAOIFI volume is licensed and git-ignored, so a fresh clone will not have
-# it. Ingest prefers it when present and falls back to the demo corpus, which
-# keeps the repository reproducible for anyone without a copy.
+# it -- download it from https://aaoifi.com/shariah-standards-3/?lang=en and drop
+# it here. Ingest prefers it when present and falls back to the demo corpus,
+# which keeps the repository reproducible for anyone without a copy.
 AAOIFI_PDF = CORPUS_DIR / "Shariaa-Standards-ENG.pdf"
 DEMO_DIR = Path(__file__).resolve().parents[2] / "corpus" / "demo"
 
