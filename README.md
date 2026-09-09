@@ -264,22 +264,56 @@ than no check at all.
 
 ### `GET /traces/{trace_id}`
 
-Replays what the agent actually saw and decided:
+**Every request is stamped with a trace ID that threads through every log line
+it produces.** The ID is minted by middleware (or adopted from an inbound
+`X-Trace-Id`), stored in a `contextvar` so no module has to pass it around, and
+returned both as a response header and in the body.
 
 ```bash
-curl http://localhost:8000/traces/a4d86abc888f44118649049a6e12b2bd
+curl -sD- -X POST localhost:8000/assess -H 'Content-Type: application/json' \
+  -d '{"query":"Can we charge a late payment penalty on a Murabaha and keep it as bank income?"}'
+# x-trace-id: a0da8be7043d4481b777878b4e927d8e
 ```
 
+Filtering `logs/app.jsonl` on that one field reconstructs the whole assessment —
+this is a real captured run, abridged to the field names:
+
 ```
-sharia.api     request.received      [path, query]
-sharia.agent   retrieval.result      [chunks, sub_queries, top_score]
-sharia.agent   verdict.decided       [confidence, rule, verdict]
-sharia.api     request.completed     [latency_ms, rejected_citations, verdict, ...]
+trace_id=a0da8be7…  request.received   [path, query]
+trace_id=a0da8be7…  llm.request        [model, max_tokens, reasoning_effort,
+                                        system_prompt, user_prompt]   ← call 1
+trace_id=a0da8be7…  llm.response       [content, finish_reason, latency_ms,
+                                        prompt_tokens, completion_tokens]
+trace_id=a0da8be7…  retrieval.result   [sub_queries, chunks, top_score]
+trace_id=a0da8be7…  llm.request        [ … ]                          ← call 2
+trace_id=a0da8be7…  llm.response       [ … ]
+trace_id=a0da8be7…  verdict.decided    [verdict, rule, confidence]
+trace_id=a0da8be7…  request.completed  [verdict, rule, confidence, latency_ms,
+                                        findings, rejected_citations, errors]
 ```
 
-Traces are held in a bounded in-process store, so they are lost on restart and
-are not shared across instances — a demonstrator, not the production audit
-trail.
+The same eight events come back as JSON from the endpoint, with no log file
+needed:
+
+```bash
+curl localhost:8000/traces/a0da8be7043d4481b777878b4e927d8e
+```
+
+That single trace carries all four things the brief asks to be logged: the trace
+ID, the retrieved chunks, **the exact prompt sent to the model**, and the
+verdict. `llm.request` is emitted *before* the API call, so a request that times
+out is as reproducible as one that succeeds.
+
+**Where the logs go.** JSON lines to stdout *and* to `logs/app.jsonl` (rotating,
+10 MB × 5). On Render only stdout survives — the filesystem is ephemeral, so the
+file is wiped on restart. Traces are additionally held in a bounded in-process
+store for `/traces`, which is lost on restart and not shared across instances: a
+demonstrator, not the production audit trail. `LOG_PROMPTS=false` keeps the
+metadata and drops the prompt text.
+
+> The test suite logs to a temp path, not to `logs/app.jsonl`. It used to share
+> it, and a run appended 168 lines of scripted-LLM output and fixture trace IDs
+> into the file you read to see what the system actually produces.
 
 ### Errors
 
