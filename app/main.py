@@ -99,9 +99,6 @@ async def lifespan(app: FastAPI):  # noqa: ANN201
     _state["missing"] = missing
 
     if missing:
-        # Start anyway and report the problem on /health. A container that dies
-        # on a missing variable is harder to diagnose than one that explains
-        # itself.
         log.error("startup.incomplete_config", extra={"missing": missing})
         _state["deps"] = None
         _state["graph"] = None
@@ -257,8 +254,6 @@ async def assess(payload: AssessRequest) -> Any:
     log.info("request.received", extra={"path": "/assess", "query": query})
 
     try:
-        # The graph is synchronous; run it off the event loop so the server can
-        # continue serving health checks during a 9-20s assessment.
         from anyio import to_thread
 
         state = await to_thread.run_sync(graph.invoke, initial_state(query, trace_id))

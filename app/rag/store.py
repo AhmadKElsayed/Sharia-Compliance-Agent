@@ -16,8 +16,6 @@ from qdrant_client.http import models as qmodels
 
 from app.rag.chunking import Chunk
 
-# Points per upsert request. Large vectors make a whole-corpus upsert exceed
-# what the managed endpoint accepts.
 UPSERT_BATCH = 128
 
 
@@ -153,8 +151,6 @@ class QdrantStore:
             )
             return
 
-        # A dimension mismatch would otherwise surface as silently poor
-        # retrieval rather than an error, so fail loudly instead.
         info = self._client.get_collection(self._collection)
         params = info.config.params.vectors
         existing = params.size if hasattr(params, "size") else None
@@ -180,9 +176,6 @@ class QdrantStore:
             for chunk, vector in zip(chunks, vectors, strict=True)
         ]
 
-        # Upserted in batches: the full corpus at 3072 dimensions is roughly
-        # 24 MB in one request, and the managed endpoint closes the connection
-        # rather than returning an error.
         for start in range(0, len(points), UPSERT_BATCH):
             self._client.upsert(
                 collection_name=self._collection,

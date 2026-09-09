@@ -113,9 +113,6 @@ class VerdictDecision:
         }
 
 
-# Retrieval below this score means the corpus does not really cover the query.
-# Calibrated against live measurements: in-scope queries score 0.53-0.74 and an
-# out-of-scope query scores 0.16.
 COVERAGE_THRESHOLD = 0.35
 
 
@@ -181,8 +178,6 @@ def decide(
     if prohibited:
         grounded = [f for f in prohibited if f.is_grounded]
         if not grounded:
-            # Every supporting citation was stripped as hallucinated. Refusing on
-            # unsupported grounds is as wrong as approving on them.
             return VerdictDecision(
                 Verdict.NEEDS_REVIEW,
                 "prohibited_findings_lost_all_citations",

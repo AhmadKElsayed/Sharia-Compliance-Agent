@@ -15,14 +15,8 @@ from app.rag.embedder import Embedder, OpenRouterEmbedder
 from app.rag.pdf_loader import load_pdf_corpus
 from app.rag.store import QdrantStore, VectorStore
 
-# The pipeline ingests the PDFs, which are the corpus as it is circulated.
-# corpus/source holds the markdown they are built from.
 CORPUS_DIR = Path(__file__).resolve().parents[2] / "corpus" / "pdf"
 
-# The AAOIFI volume is licensed and git-ignored, so a fresh clone will not have
-# it -- download it from https://aaoifi.com/shariah-standards-3/?lang=en and drop
-# it here. Ingest prefers it when present and falls back to the demo corpus,
-# which keeps the repository reproducible for anyone without a copy.
 AAOIFI_PDF = CORPUS_DIR / "Shariaa-Standards-ENG.pdf"
 DEMO_DIR = Path(__file__).resolve().parents[2] / "corpus" / "demo"
 

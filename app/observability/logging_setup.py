@@ -20,8 +20,6 @@ from typing import Any
 
 from app.observability.trace import get_trace_id
 
-# Attributes present on every LogRecord. Anything outside this set arrived via
-# ``extra=`` and belongs in the structured payload.
 _STANDARD = frozenset(
     """args asctime created exc_info exc_text filename funcName levelname levelno
     lineno module msecs message msg name pathname process processName
@@ -70,8 +68,6 @@ class JSONFormatter(logging.Formatter):
         payload = record_payload(record)
         line = json.dumps(payload, ensure_ascii=False, default=str)
         if len(line) > MAX_VALUE_CHARS:
-            # A single oversized record must not wreck a log pipeline; keep the
-            # identifying fields and drop the bulk.
             trimmed = {
                 k: payload[k]
                 for k in ("ts", "level", "logger", "event", "trace_id")
@@ -120,13 +116,6 @@ def configure_logging(
 
         root.addHandler(TraceCollectorHandler())
 
-    # Uvicorn's access log duplicates what the request middleware records, and
-    # HTTP clients log a line per call at INFO, which drowns the agent's own
-    # events and fills a trace with six near-identical rows.
-    #
-    # "httpx2" is not a typo: the OpenAI v3 SDK vendors its own httpx under that
-    # name, so silencing "httpx" alone leaves every LLM and embedding call
-    # logged.
     logging.getLogger("uvicorn.access").disabled = True
     for noisy in ("httpx", "httpx2", "httpcore", "openai", "qdrant_client"):
         logging.getLogger(noisy).setLevel(logging.WARNING)

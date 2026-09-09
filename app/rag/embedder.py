@@ -18,8 +18,6 @@ from typing import Protocol, runtime_checkable
 
 from openai import OpenAI
 
-# OpenRouter accepts batched input; 64 keeps request bodies comfortably small
-# while cutting the 30-chunk corpus down to a single round trip.
 BATCH_SIZE = 64
 
 _TOKEN_RE = re.compile(r"[a-z0-9']+")
@@ -82,8 +80,6 @@ class OpenRouterEmbedder:
         for start in range(0, len(texts), BATCH_SIZE):
             batch = texts[start : start + BATCH_SIZE]
             response = self._client.embeddings.create(model=self._model, input=batch)
-            # The API does not guarantee ordering, so sort by index rather than
-            # trusting response order.
             ordered = sorted(response.data, key=lambda d: d.index)
             if len(ordered) != len(batch):
                 raise RuntimeError(
@@ -133,8 +129,6 @@ class HashingEmbedder:
 
         norm = math.sqrt(sum(v * v for v in vec))
         if norm == 0.0:
-            # An empty or purely non-alphanumeric string still needs a valid
-            # unit vector, or cosine similarity is undefined.
             vec[0] = 1.0
             return vec
         return [v / norm for v in vec]

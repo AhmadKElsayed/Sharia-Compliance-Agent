@@ -31,8 +31,6 @@ def isolate_logging(tmp_path_factory: pytest.TempPathFactory) -> None:
     log_dir = tmp_path_factory.mktemp("logs")
     os.environ["LOG_FILE"] = str(log_dir / "test.jsonl")
 
-    # Settings are cached, so a value read before this fixture ran would persist
-    # for the whole session.
     from app.config import get_settings
 
     get_settings.cache_clear()

@@ -276,10 +276,6 @@ GOLDEN_SET: list[GoldenCase] = [
         "SS-22",
     ),
 
-    # === near-miss pairs =================================================
-    # Each pair is surface-similar but governed by different standards.
-    # Retrieval that keys on vocabulary rather than on the transaction will
-    # collapse them together.
     case(
         "We want to buy a commodity on the metal exchange and sell it immediately to give the customer cash.",
         "SS-30", "SS-44",
@@ -339,9 +335,6 @@ GOLDEN_SET: list[GoldenCase] = [
         kind=NEAR_MISS,
     ),
 
-    # === adversarial =====================================================
-    # Prohibited structures described the way a proposer hoping for approval
-    # would describe them. The governing prohibition must still be retrieved.
     case(
         "We charge a fixed administrative service fee on the outstanding balance, recalculated monthly, "
         "to cover the cost of maintaining the account.",

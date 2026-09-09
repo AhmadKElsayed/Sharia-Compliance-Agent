@@ -57,16 +57,8 @@ class Chunk:
     heading: str
     sections: list[str] = field(default_factory=list)
     text: str = ""
-    # Full lineage, e.g. "Shari'ah Standard No.(8) Murabahah > 2. Procedures >
-    # 2/1 ... > clause 2/1/1". When set it replaces the title+heading prefix,
-    # which is what strategy E (contextual prefix) requires.
     breadcrumb: str = ""
-    # Language of the clause. Kept in the payload from day one so an Arabic
-    # edition becomes a filter rather than a re-ingest: AAOIFI clause numbering
-    # is identical across editions, so the same id addresses both.
     lang: str = "en"
-    # A human-readable citation when the generic "doc §section" form is not what
-    # a reviewer would look up. Baked into the payload at ingest time.
     citation_override: str = ""
 
     @property

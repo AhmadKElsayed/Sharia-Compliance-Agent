@@ -40,15 +40,9 @@ def evaluate(deps: AgentDeps, verbose: bool = False) -> dict[str, float]:
     precisions: list[float] = []
     latencies: list[float] = []
     failures: list[str] = []
-    # Per-kind tallies. A coverage miss and an adversarial miss mean different
-    # things -- the first says a topic is unreachable, the second says a
-    # euphemised prohibition slipped past -- so an aggregate hides the signal.
     by_kind: dict[str, list[int]] = {}
 
     for gold in GOLDEN_SET:
-        # The planner needs parsed structure, which normally comes from the LLM.
-        # Using the raw query alone keeps this deterministic and free; it also
-        # measures the floor rather than the best case.
         state = {
             "query": gold.query,
             "retrieval_round": 0,

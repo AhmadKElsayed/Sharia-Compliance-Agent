@@ -37,30 +37,10 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = 60.0
     llm_max_retries: int = 2
 
-    # OpenRouter routes a model across many providers whose throughput varies by
-    # an order of magnitude. Measured on this model: default routing gave
-    # 15.6 tok/s, throughput-sorted routing gave 130.3 tok/s. Empty disables the
-    # preference and uses OpenRouter's default routing.
     openrouter_provider_sort: str = "throughput"
 
-    # Reasoning effort: "low", "medium", "high", or "" to disable.
-    #
-    # Measured on a four-query benchmark (see PLAN.md "Reasoning calibration").
-    # "low" and off both produced correct verdicts on all four; "high" produced
-    # three of four, downgrading a genuinely compliant Mudarabah by inventing
-    # CONDITIONAL findings about details the query never raised. Given more
-    # budget the model manufactures doubt rather than reasoning more carefully,
-    # which is corrosive here because the verdict rules already bias toward
-    # NEEDS_REVIEW.
-    #
-    # "low" is the default because it matched off on verdicts while mapping
-    # severities better (UNRESOLVED rather than CONDITIONAL for a clause the
-    # corpus says to refer for review) and consolidating redundant findings.
     llm_reasoning_effort: str = "low"
 
-    # Must comfortably exceed reasoning plus answer. Set too low, the reasoning
-    # pass consumes the entire budget and the call returns empty content: 3072
-    # of 3072 tokens were reasoning tokens before this was raised.
     llm_max_tokens: int = 12000
 
     # --- Qdrant ------------------------------------------------------------
@@ -70,38 +50,16 @@ class Settings(BaseSettings):
     qdrant_timeout_seconds: float = 20.0
 
     # --- Retrieval ---------------------------------------------------------
-    # Candidates per sub-query. Raised from 5 to 10 together with reranking:
-    # measured on the golden set, neither change helps alone. A wider pool with
-    # no reranker leaves the extra candidates below the cutoff; a reranker over
-    # a narrow pool cannot promote a clause that never entered it. Together they
-    # took recall from 0.955 to 1.000 and MRR from 0.898 to 0.924.
     retrieval_top_k: int = 10
     retrieval_score_threshold: float = 0.35
 
-    # Cross-encoder reranking over the fused candidates. Vector similarity is a
-    # bi-encoder approximation that never sees query and clause together; a
-    # cross-encoder does, and is the standard remedy for the case where
-    # similarity ranks generic text above the governing clause.
-    #
-    # Served by OpenRouter's /rerank endpoint, so no extra credential.
     rerank_enabled: bool = True
     rerank_model: str = "voyageai/rerank-2.5"
-    # Candidates gathered before reranking. Wider than the final excerpt count,
-    # since the point of reranking is to choose well from a larger pool.
     rerank_candidates: int = 24
 
     # --- Observability -----------------------------------------------------
     log_level: str = "INFO"
 
-    # Log the fully resolved LLM prompt and the raw completion.
-    #
-    # On by default because an assessment must be reproducible from its trace:
-    # without the exact prompt, a wrong verdict cannot be attributed to
-    # retrieval, to the prompt, or to the model.
-    #
-    # Turn this OFF in production. A compliance query can carry client names,
-    # deal terms, or material non-public information, and this writes it to
-    # stdout and to the log file in plaintext. See DOCUMENTATION.md §5, Risk 3.
     log_prompts: bool = True
     log_file: str = "logs/app.jsonl"
 

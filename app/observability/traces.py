@@ -72,7 +72,6 @@ class TraceStore:
             return len(self._traces)
 
 
-# Module-level store shared by the handler and the API.
 TRACES = TraceStore()
 
 

@@ -36,13 +36,8 @@ MAX_RETRIEVAL_ROUNDS = 2
 MAX_SUB_QUERIES = 4
 MAX_EXCERPTS = 8
 
-# Sub-queries shorter than this match generic clause language rather than a
-# topic, and their inflated scores crowd out correct results.
 MIN_SUB_QUERY_WORDS = 3
 
-# Reciprocal-rank-fusion constant. 60 is the value from the original RRF paper
-# and is deliberately large so that ranks 1-10 stay close together, letting
-# agreement across sub-queries matter more than a single top placement.
 RRF_K = 60
 
 
@@ -69,8 +64,6 @@ class AgentDeps:
         self.store = store
         self.top_k = top_k
         self.score_threshold = score_threshold
-        # Shared budget for both calls. It must cover the reasoning pass as well
-        # as the answer; too small and the model returns empty content.
         self.max_tokens = max_tokens
         # Optional; retrieval degrades to fused vector ordering without it.
         self.reranker = reranker
@@ -91,16 +84,6 @@ def _error(state: AgentState, message: str) -> None:
     log.warning("agent.node.error", extra={"detail": message})
 
 
-# --- 1. parse_query ------------------------------------------------------
-
-# Intents the parse step can return. This node is the router: it classifies the
-# message and the conditional edge below acts on the classification.
-#
-# The LLM does the classifying rather than a keyword list. A word list was tried
-# first and rejected: it cannot cover greetings in other languages, transliterated
-# salutations, typos or informal phrasing without growing indefinitely, and every
-# word added widens the chance of swallowing a real query. The model already
-# reads this message for structure, so classification is free -- no extra call.
 INTENT_GREETING = "GREETING"
 INTENT_ASSESSMENT = "ASSESSMENT"
 INTENT_OTHER = "OTHER"
@@ -132,10 +115,6 @@ def parse_query(state: AgentState, deps: AgentDeps) -> AgentState:
         )
         _record_call(state, "parse_query", response)
     except LLMError as exc:
-        # Without structure we can still retrieve on the raw query, so degrade
-        # rather than abort; the verdict rules will handle thin evidence. The
-        # intent defaults to ASSESSMENT for the same reason: a failed classifier
-        # must not silently turn a compliance question into a welcome message.
         _error(state, f"parse_query failed: {exc}")
         state["intent"] = INTENT_ASSESSMENT
         state["in_scope"] = True
@@ -146,7 +125,6 @@ def parse_query(state: AgentState, deps: AgentDeps) -> AgentState:
 
     intent = _intent(parsed)
     state["intent"] = intent
-    # A greeting is never in scope, whatever the model put in the flag.
     state["in_scope"] = intent == INTENT_ASSESSMENT and bool(
         parsed.get("in_scope", True)
     )
@@ -155,9 +133,6 @@ def parse_query(state: AgentState, deps: AgentDeps) -> AgentState:
     state["features"] = [str(f) for f in parsed.get("features", []) if str(f).strip()]
     state["concepts"] = [str(c) for c in parsed.get("concepts", []) if str(c).strip()]
     return state
-
-
-# --- 2. plan_retrieval ---------------------------------------------------
 
 
 def _ground(text: str, product: str, template: str = "{product} {text}") -> str:
@@ -196,24 +171,12 @@ def plan_retrieval(state: AgentState, deps: AgentDeps) -> AgentState:
     product = (state.get("product_type") or "").strip()
 
     if round_no == 1:
-        # Sub-queries are grounded in the product rather than dressed in generic
-        # legal phrasing. Measured on a failing case: "<product> <feature>"
-        # returned 4/5 relevant clauses and "<concept> in <product>" 3/5, while
-        # the same feature alone, the bare concept, and the previous templates
-        # ("... permissibility ruling", "... definition and prohibition
-        # criteria") each returned 0/5.
-        #
-        # The templates were worse than useless. Generic legal phrasing matches
-        # generic clause language across the whole corpus, so it scored *higher*
-        # (0.55) than correct hits (0.42) while retrieving nothing relevant.
         sub: list[str] = [query]
         for feature in state.get("features", [])[:2]:
             sub.append(_ground(feature, product))
         for concept in state.get("concepts", [])[:2]:
             sub.append(_ground(concept, product, template="{text} in {product}"))
     else:
-        # Broadened pass: drop the specifics that failed and reach for the
-        # general principles instead.
         state["broadened"] = True
         sub = [
             query,
@@ -225,21 +188,13 @@ def plan_retrieval(state: AgentState, deps: AgentDeps) -> AgentState:
     deduped: list[str] = []
     for item in sub:
         cleaned = " ".join(item.split())
-        # A sub-query too thin to carry topic ends up matching generic clause
-        # language everywhere. One observed failure derived "Applies to
-        # depositors permissibility ruling" from a vague feature; it scored
-        # 0.56 against wholly irrelevant clauses and displaced correct hits.
         if len(cleaned.split()) < MIN_SUB_QUERY_WORDS:
             continue
         if cleaned and cleaned not in deduped:
             deduped.append(cleaned)
 
-    # The raw query is always kept, even if the filter emptied everything else.
     state["sub_queries"] = deduped[:MAX_SUB_QUERIES] or [query]
     return state
-
-
-# --- 3. retrieve ---------------------------------------------------------
 
 
 def _embed_sub_queries(
@@ -303,17 +258,8 @@ def retrieve(state: AgentState, deps: AgentDeps) -> AgentState:
             continue
 
         for rank, hit in enumerate(hits, start=1):
-            # Reciprocal rank fusion. Ordering by raw similarity across
-            # different sub-queries compares scores that are not on a common
-            # scale: measured on one failure, a vague sub-query scored 0.56 on
-            # irrelevant clauses while the user's own question scored 0.42 on
-            # the governing ones, so the wrong results displaced the right ones.
-            # Fusing on rank makes a sub-query's *ordering* count and its
-            # absolute scores irrelevant, so no single query can dominate.
             fused[hit.chunk_id] = fused.get(hit.chunk_id, 0.0) + 1.0 / (RRF_K + rank)
 
-            # The raw similarity is still kept, for display and for the
-            # coverage threshold that decides NEEDS_REVIEW.
             existing = best.get(hit.chunk_id)
             if existing is None or hit.score > existing.score:
                 best[hit.chunk_id] = hit
@@ -323,10 +269,6 @@ def retrieve(state: AgentState, deps: AgentDeps) -> AgentState:
         for chunk_id in sorted(fused, key=lambda c: (-fused[c], -best[c].score))
     ]
 
-    # Rerank a wider pool than we finally use. Fusion fixes the comparability of
-    # scores across sub-queries but is still bi-encoder similarity underneath;
-    # a cross-encoder judges the query and clause together and is far better at
-    # telling a governing rule from text that merely reads like one.
     ranked = candidates[:MAX_EXCERPTS]
 
     if deps.reranker is not None and len(candidates) > 1:
@@ -338,9 +280,6 @@ def retrieve(state: AgentState, deps: AgentDeps) -> AgentState:
                 top_n=MAX_EXCERPTS,
             )
         except Exception as exc:  # noqa: BLE001
-            # Reranking is a quality improvement, never a dependency. The
-            # supplied ordering is already usable, so a failure here degrades
-            # the ranking rather than the assessment.
             _error(state, f"rerank failed, using fused order: {exc}")
             order = []
 
@@ -393,9 +332,6 @@ def should_broaden(state: AgentState, deps: AgentDeps) -> str:
 
     Returns the name of the next node.
     """
-    # Retained as a guard rather than removed. ``should_retrieve`` now catches
-    # this before retrieval, but a node that decides a verdict's fate should not
-    # depend on an upstream edge having done its job.
     if state.get("in_scope") is False:
         return "decide_verdict"
 
@@ -403,9 +339,6 @@ def should_broaden(state: AgentState, deps: AgentDeps) -> str:
     if weak and state.get("retrieval_round", 1) < MAX_RETRIEVAL_ROUNDS:
         return "plan_retrieval"
     return "assess"
-
-
-# --- 4. assess -----------------------------------------------------------
 
 
 _SEVERITY_ALIASES = {
@@ -511,9 +444,6 @@ def assess(state: AgentState, deps: AgentDeps) -> AgentState:
     return state
 
 
-# --- 5. verify_citations -------------------------------------------------
-
-
 def verify(state: AgentState, deps: AgentDeps) -> AgentState:
     """Strip citations that do not correspond to a retrieved chunk."""
     _mark(state, "verify_citations")
@@ -530,9 +460,6 @@ def verify(state: AgentState, deps: AgentDeps) -> AgentState:
             extra={"rejected": rejected, "retrieved": sorted(retrieved_ids)},
         )
     return state
-
-
-# --- 6. decide_verdict ---------------------------------------------------
 
 
 def decide_verdict(state: AgentState, deps: AgentDeps) -> AgentState:

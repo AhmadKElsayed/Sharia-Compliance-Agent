@@ -148,9 +148,6 @@ DISCLAIMER = (
     "approval."
 )
 
-# An IRRELEVANT response assessed nothing, so the standard disclaimer would be a
-# false statement about it -- there is no retrieved standards text behind a
-# greeting, and telling a reviewer to review one wastes their attention.
 NO_ASSESSMENT_NOTE = (
     "No compliance assessment was performed for this message."
 )

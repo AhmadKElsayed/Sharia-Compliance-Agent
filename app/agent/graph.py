@@ -41,9 +41,6 @@ def build_graph(deps: AgentDeps):
 
     graph.set_entry_point("parse_query")
 
-    # An out-of-scope query never reaches retrieval. parse_query already knows
-    # it is not about a financial product, so embedding, searching and reranking
-    # it spends money and sends the text to a second provider to learn nothing.
     graph.add_conditional_edges(
         "parse_query",
         nodes.should_retrieve,

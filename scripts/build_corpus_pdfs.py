@@ -91,8 +91,6 @@ def inline(text: str) -> str:
     text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
     text = re.sub(r"\*(.+?)\*", r"<i>\1</i>", text)
-    # Cross-references such as [SFS-001 §2.1] are rendered in the accent colour
-    # so they read as references in the PDF, as they would in a real manual.
     text = re.sub(
         r"\[([A-Z]{3}-\d{3}[^\]]*)\]",
         r'<font color="#1a3a5c"><b>[\1]</b></font>',

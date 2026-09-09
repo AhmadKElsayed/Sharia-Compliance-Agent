@@ -320,19 +320,9 @@ def test_retrieval_uses_rank_fusion_not_raw_score(store_and_embedder) -> None:
     retrieve(state, deps)
 
     ids = [h.chunk_id for h in state["hits"]]
-    # RIGHT is rank 1 in one query and rank 3 in the other, so fusion promotes
-    # it above JUNK-A, which ranks first only once. Max-score merging would put
-    # JUNK-A first on its 0.56.
     assert ids[0] == "RIGHT", f"rank fusion should promote RIGHT, got {ids}"
     # The raw similarity is preserved for the coverage threshold.
     assert state["hits"][0].score == 0.42
-
-
-# --- batched sub-query embedding ----------------------------------------
-#
-# Sub-queries were embedded one at a time: four sequential round trips where
-# one would do. Measured live, 1,904 ms sequential against 679 ms batched.
-# The batch must not cost the error isolation the loop provided.
 
 
 def _hit(cid: str, score: float = 0.5):  # noqa: ANN202
@@ -462,13 +452,6 @@ def test_no_sub_queries_embeds_nothing() -> None:
     assert state["hits"] == []
 
 
-# --- out-of-scope short-circuit -----------------------------------------
-#
-# parse_query already knows a greeting is not a financial product. The scope
-# check used to live only in should_broaden, one node too late, so the query was
-# embedded, searched and reranked before anything consulted the flag.
-
-
 class _NeverCalledEmbedder:
     dim = 4
 
@@ -494,8 +477,6 @@ def test_out_of_scope_skips_retrieval_entirely() -> None:
     from app.agent.graph import build_graph, initial_state
     from app.agent.nodes import AgentDeps
 
-    # Deliberately a real off-topic *question*, not a greeting: greetings take
-    # the cheaper pre-LLM path, so using one here would test the wrong thing.
     llm = ScriptedLLM([{"in_scope": False, "summary": "not a financial product",
                         "features": [], "concepts": [], "product_type": ""}])
     deps = AgentDeps(
@@ -538,13 +519,6 @@ def test_should_retrieve_routes_on_the_scope_flag() -> None:
     assert should_retrieve({"in_scope": True}) == "plan_retrieval"
     # Absent flag means parse failed and degraded to in-scope; retrieve anyway.
     assert should_retrieve({}) == "plan_retrieval"
-
-
-# --- intent routing ------------------------------------------------------
-#
-# parse_query is the router: it classifies the message and should_retrieve acts
-# on the classification. Only ASSESSMENT reaches retrieval. Greetings and
-# off-topic questions both stop at the verdict, with different answers.
 
 
 def _parsed(intent: str, **extra) -> dict:  # noqa: ANN003

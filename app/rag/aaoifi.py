@@ -35,14 +35,6 @@ import pymupdf
 
 from app.rag.chunking import Chunk
 
-# "Shari'ah Standard No. (8): Murabahah" — the running header names the standard
-# on every page, which is how a page is attributed to its standard.
-#
-# The period after "No" is optional: standards 42-44 and 46-48 are headed
-# "No (44)" while the rest use "No. (8)". Requiring it made those six invisible,
-# and their clauses silently inherited the preceding standard's number — so
-# clauses from "Obtaining and Deploying Liquidity" were cited as "Islamic
-# Reinsurance". Citation correctness depends on this one character.
 STANDARD_RE = re.compile(r"Shari.ah Standard No\.?\s*\((\d+)\)\s*:\s*(.+?)\s*$")
 
 # "2. Procedures Prior to the Contract of Murabahah"
@@ -54,10 +46,6 @@ NUMBERED_RE = re.compile(r"^(\d+(?:/\d+){1,3})\s+(\S.*)$")
 # Table-of-contents rows use dot leaders: "General rulings ......... 345".
 DOT_LEADER_RE = re.compile(r"\.{4,}")
 
-# A clause states a rule and so opens with a capital or a quote. A numbered line
-# whose body starts lowercase or with punctuation is a cross-reference that
-# happened to wrap onto a new line -- "as stated in item\n5/6." -- and parsing it
-# as a clause would create an empty rule and orphan the real text.
 CLAUSE_OPENER_RE = re.compile(r'^[A-Z“"(\[]')
 
 MIN_CLAUSE_WORDS = 5
@@ -244,10 +232,6 @@ def extract_standards(pdf_path: Path) -> list[Standard]:
         if not lines:
             continue
 
-        # The running header identifies the standard and is then discarded.
-        # It is not reliably the first line -- on some pages other furniture
-        # precedes it -- and missing it silently attributes the page's clauses
-        # to the previous standard, yielding citations to the wrong document.
         header = None
         header_idx = -1
         for idx, candidate in enumerate(lines[:4]):
@@ -307,10 +291,6 @@ def extract_standards(pdf_path: Path) -> list[Standard]:
                 number, text = numbered.group(1), numbered.group(2)
                 depth = number.count("/") + 1
                 if depth == 2:
-                    # A two-level item is a heading when clauses nest beneath it,
-                    # but in some standards it is itself the rule. It is recorded
-                    # as a clause either way, and also retained as the subsection
-                    # label so any deeper clauses inherit the context.
                     subsection = f"{number} {text}"
                 pending = Clause(
                     standard_no=current_no,

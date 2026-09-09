@@ -60,8 +60,6 @@ def test_point_ids_are_unique_and_deterministic(chunks: list[Chunk]) -> None:
 
 def test_no_chunk_exceeds_the_size_ceiling(chunks: list[Chunk]) -> None:
     for chunk in chunks:
-        # A single oversized clause is allowed through whole rather than split
-        # mid-sentence, so the ceiling is checked against multi-clause chunks.
         if len(chunk.sections) > 1:
             assert len(chunk.text.split()) <= MAX_WORDS + 60, chunk.chunk_id
 

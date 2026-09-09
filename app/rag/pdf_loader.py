@@ -120,7 +120,6 @@ def _normalise(lines: list[str]) -> tuple[str, str]:
             continue
 
         if current is not None:
-            # A wrapped continuation of the clause in progress.
             current.append(line)
 
     flush()

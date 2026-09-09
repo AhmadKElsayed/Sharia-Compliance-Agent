@@ -21,9 +21,6 @@ from starlette.responses import Response
 
 TRACE_HEADER = "X-Trace-Id"
 
-# Inbound IDs are echoed into logs and the response, so they are constrained to
-# a safe shape rather than trusted: an unbounded header would let a caller
-# inject newlines into log lines or arbitrary bytes into a response header.
 SAFE_TRACE_ID = re.compile(r"^[A-Za-z0-9._-]{8,64}$")
 
 _trace_id: ContextVar[str] = ContextVar("trace_id", default="")

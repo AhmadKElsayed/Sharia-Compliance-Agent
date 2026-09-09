@@ -24,12 +24,8 @@ from openai import OpenAI
 
 log = logging.getLogger("sharia.llm")
 
-# Matches a ```json ... ``` fence, capturing the body.
 FENCE_RE = re.compile(r"```(?:json)?\s*(.+?)\s*```", re.DOTALL | re.IGNORECASE)
 
-# Prompts are logged in full so an assessment can be reproduced exactly, but a
-# single record must not be so large that the formatter drops it wholesale.
-# Clipping the prompt field keeps the surrounding metadata intact.
 MAX_LOGGED_PROMPT_CHARS = 12_000
 
 
@@ -200,13 +196,7 @@ class LLMClient:
                     kwargs["response_format"] = {"type": "json_object"}
                 extra: dict[str, Any] = {}
                 if self._provider_sort:
-                    # Without this, OpenRouter may route to whichever provider is
-                    # cheapest rather than fastest. On this model that is the
-                    # difference between a 2 second and a 30 second call.
                     extra["provider"] = {"sort": self._provider_sort}
-                # An empty effort disables reasoning entirely. Either way the
-                # flag is explicit, because leaving it to the provider default
-                # is what let a reasoning pass eat the whole token budget.
                 extra["reasoning"] = (
                     {"effort": self._reasoning_effort}
                     if self._reasoning_effort
@@ -215,8 +205,6 @@ class LLMClient:
                 if extra:
                     kwargs["extra_body"] = extra
 
-                # The fully resolved prompt is logged before the call, so a
-                # failed request is as reproducible as a successful one.
                 request_event: dict[str, Any] = {
                     "model": model,
                     "max_tokens": max_tokens,
@@ -249,9 +237,6 @@ class LLMClient:
                 log.info("llm.response", extra=response_event)
 
                 if not content.strip():
-                    # Empty content with a length stop is the token-exhaustion
-                    # signature. Naming it here beats a downstream JSON error
-                    # that looks like a model quality problem.
                     reason = choice.finish_reason or "unknown"
                     raise LLMError(
                         f"{model} returned empty content (finish_reason={reason}); "
