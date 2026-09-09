@@ -325,3 +325,137 @@ def test_retrieval_uses_rank_fusion_not_raw_score(store_and_embedder) -> None:
     assert ids[0] == "RIGHT", f"rank fusion should promote RIGHT, got {ids}"
     # The raw similarity is preserved for the coverage threshold.
     assert state["hits"][0].score == 0.42
+
+
+# --- batched sub-query embedding ----------------------------------------
+#
+# Sub-queries were embedded one at a time: four sequential round trips where
+# one would do. Measured live, 1,904 ms sequential against 679 ms batched.
+# The batch must not cost the error isolation the loop provided.
+
+
+def _hit(cid: str, score: float = 0.5):  # noqa: ANN202
+    from app.rag.store import SearchHit
+
+    return SearchHit(
+        chunk_id=cid, score=score, doc_id=cid, title="t", heading="h",
+        section_label="1", citation=cid, text="x",
+    )
+
+
+class _AnyStore:
+    def search(self, vector, top_k, score_threshold=None):  # noqa: ANN001, ANN201
+        return [_hit("A", 0.6), _hit("B", 0.5)]
+
+
+class _CountingEmbedder:
+    """Records how the caller asked for its vectors."""
+
+    dim = 4
+
+    def __init__(self) -> None:
+        self.batch_calls = 0
+        self.single_calls = 0
+
+    def embed_documents(self, texts):  # noqa: ANN001, ANN201
+        self.batch_calls += 1
+        return [[1.0, 0.0, 0.0, 0.0] for _ in texts]
+
+    def embed_query(self, text: str):  # noqa: ANN201
+        self.single_calls += 1
+        return [1.0, 0.0, 0.0, 0.0]
+
+
+def test_sub_queries_are_embedded_in_one_call() -> None:
+    from app.agent.nodes import AgentDeps, retrieve
+
+    embedder = _CountingEmbedder()
+    deps = AgentDeps(llm=None, embedder=embedder, store=_AnyStore(), top_k=5)
+    state = {
+        "sub_queries": ["first sub query", "second sub query", "third sub query"],
+        "node_path": [], "errors": [],
+    }
+    retrieve(state, deps)
+
+    assert embedder.batch_calls == 1, "one batched call, not one per sub-query"
+    assert embedder.single_calls == 0
+    assert state["hits"], "retrieval still returns results"
+
+
+def test_batch_failure_falls_back_to_individual_calls() -> None:
+    """The loop this replaced isolated errors. That property must survive."""
+    from app.agent.nodes import AgentDeps, retrieve
+
+    class BrokenBatch(_CountingEmbedder):
+        def embed_documents(self, texts):  # noqa: ANN001, ANN201
+            self.batch_calls += 1
+            raise RuntimeError("batch endpoint unavailable")
+
+    embedder = BrokenBatch()
+    deps = AgentDeps(llm=None, embedder=embedder, store=_AnyStore(), top_k=5)
+    state = {
+        "sub_queries": ["first sub query", "second sub query"],
+        "node_path": [], "errors": [],
+    }
+    retrieve(state, deps)
+
+    assert embedder.single_calls == 2, "each sub-query retried individually"
+    assert state["hits"], "a batch failure must not fail the assessment"
+    assert any("batch embedding failed" in e for e in state["errors"])
+
+
+def test_short_batch_response_falls_back() -> None:
+    """A silently truncated batch would misalign vectors with sub-queries."""
+    from app.agent.nodes import AgentDeps, retrieve
+
+    class ShortBatch(_CountingEmbedder):
+        def embed_documents(self, texts):  # noqa: ANN001, ANN201
+            self.batch_calls += 1
+            return [[1.0, 0.0, 0.0, 0.0]]  # one vector for three sub-queries
+
+    embedder = ShortBatch()
+    deps = AgentDeps(llm=None, embedder=embedder, store=_AnyStore(), top_k=5)
+    state = {
+        "sub_queries": ["first sub query", "second sub query", "third sub query"],
+        "node_path": [], "errors": [],
+    }
+    retrieve(state, deps)
+
+    assert embedder.single_calls == 3
+    assert any("returned 1 vectors" in e for e in state["errors"])
+
+
+def test_one_bad_sub_query_does_not_lose_the_others() -> None:
+    from app.agent.nodes import AgentDeps, retrieve
+
+    class Flaky(_CountingEmbedder):
+        def embed_documents(self, texts):  # noqa: ANN001, ANN201
+            raise RuntimeError("no batch")
+
+        def embed_query(self, text: str):  # noqa: ANN201
+            self.single_calls += 1
+            if "poison" in text:
+                raise RuntimeError("cannot embed this one")
+            return [1.0, 0.0, 0.0, 0.0]
+
+    deps = AgentDeps(llm=None, embedder=Flaky(), store=_AnyStore(), top_k=5)
+    state = {
+        "sub_queries": ["a poison sub query", "a healthy sub query"],
+        "node_path": [], "errors": [],
+    }
+    retrieve(state, deps)
+
+    assert state["hits"], "the healthy sub-query still retrieves"
+    assert any("poison" in e for e in state["errors"])
+
+
+def test_no_sub_queries_embeds_nothing() -> None:
+    from app.agent.nodes import AgentDeps, retrieve
+
+    embedder = _CountingEmbedder()
+    deps = AgentDeps(llm=None, embedder=embedder, store=_AnyStore(), top_k=5)
+    state = {"sub_queries": [], "node_path": [], "errors": []}
+    retrieve(state, deps)
+
+    assert embedder.batch_calls == 0 and embedder.single_calls == 0
+    assert state["hits"] == []
