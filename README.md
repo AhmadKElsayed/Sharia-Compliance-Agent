@@ -232,7 +232,7 @@ Open <http://localhost:8000/docs> for the interactive OpenAPI UI.
 |---|---|---|
 | `POST` | `/assess` | Submit a query, receive a structured verdict |
 | `GET` | `/health` | Liveness and readiness |
-| `GET` | `/corpus` | What is indexed |
+| `GET` | `/corpus` | What is indexed — counts and identifiers, no clause text |
 | `GET` | `/traces/{trace_id}` | Replay an assessment for audit |
 | `GET` | `/docs` | OpenAPI UI |
 
@@ -261,6 +261,26 @@ than no check at all.
   "missing_config": []
 }
 ```
+
+### `GET /corpus`
+
+Takes no parameters — it summarises the whole index:
+
+```json
+{
+  "collection": "aaoifi_ss_en",
+  "chunks": 1973,
+  "embedding_model": "openai/text-embedding-3-large",
+  "embedding_dim": 3072,
+  "chunking": "clause-level with hierarchical contextual headers",
+  "source": "AAOIFI Shari'ah Standards (English edition)",
+  "note": "Clause text is licensed and is not served in bulk. Assessments return short quotes with citations."
+}
+```
+
+Deliberately counts and identifiers only. The standards are commercially
+licensed, so a public endpoint must not serve them back in bulk (§5 Risk 5 in the
+trade-offs document); assessments return short quotes with citations instead.
 
 ### `GET /traces/{trace_id}`
 

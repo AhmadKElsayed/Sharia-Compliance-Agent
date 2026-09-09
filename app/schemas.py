@@ -80,6 +80,24 @@ class AssessResponse(BaseModel):
     disclaimer: str = ""
 
 
+class CorpusResponse(BaseModel):
+    """What is indexed.
+
+    Counts and identifiers only, never clause text in bulk: the standards are
+    licensed, so a public endpoint must not serve them back (see
+    DOCUMENTATION.md §5, Risk 5). Assessments return short quotes with citations
+    instead.
+    """
+
+    collection: str = Field(description="Qdrant collection backing retrieval.")
+    chunks: int = Field(description="Number of indexed clauses.")
+    embedding_model: str
+    embedding_dim: int = Field(description="Vector width; must match the model.")
+    chunking: str = Field(description="How the corpus was split.")
+    source: str = Field(description="Provenance of the indexed text.")
+    note: str = Field(default="", description="Licensing caveat.")
+
+
 class DependencyHealth(BaseModel):
     name: str
     ok: bool

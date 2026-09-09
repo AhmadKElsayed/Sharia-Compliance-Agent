@@ -34,6 +34,7 @@ from app.observability.traces import TRACES
 from app.schemas import (
     AssessRequest,
     AssessResponse,
+    CorpusResponse,
     DependencyHealth,
     ErrorDetail,
     ErrorResponse,
@@ -296,7 +297,12 @@ async def assess(payload: AssessRequest) -> Any:
     return response
 
 
-@app.get("/corpus", summary="What is indexed")
+@app.get(
+    "/corpus",
+    response_model=CorpusResponse,
+    summary="What is indexed",
+    responses={503: {"model": ErrorResponse}},
+)
 async def corpus() -> Any:
     """Summarise the indexed corpus without exposing full clause text.
 
@@ -319,18 +325,18 @@ async def corpus() -> Any:
             status.HTTP_503_SERVICE_UNAVAILABLE,
         )
 
-    return {
-        "collection": settings.qdrant_collection,
-        "chunks": count,
-        "embedding_model": settings.openrouter_embedding_model,
-        "embedding_dim": settings.embedding_dim,
-        "chunking": "clause-level with hierarchical contextual headers",
-        "source": "AAOIFI Shari'ah Standards (English edition)",
-        "note": (
+    return CorpusResponse(
+        collection=settings.qdrant_collection,
+        chunks=count,
+        embedding_model=settings.openrouter_embedding_model,
+        embedding_dim=settings.embedding_dim,
+        chunking="clause-level with hierarchical contextual headers",
+        source="AAOIFI Shari'ah Standards (English edition)",
+        note=(
             "Clause text is licensed and is not served in bulk. Assessments "
             "return short quotes with citations."
         ),
-    }
+    )
 
 
 @app.get(
