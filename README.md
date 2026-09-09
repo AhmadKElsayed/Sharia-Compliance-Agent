@@ -519,6 +519,32 @@ parse error into a silent retrieval failure. The case is kept failing on purpose
 
 ---
 
+## Deployment
+
+Running at <https://sharia-compliance-agent.onrender.com> on Render's free tier,
+built from `requirements.txt` with Render's **native Python runtime** — no
+Dockerfile and no `render.yaml`. At this size a container added a build step and
+an image to maintain for no benefit.
+
+| Setting | Value |
+|---|---|
+| Build command | `pip install -r requirements.txt` |
+| Start command | `uvicorn app.main:app --host 0.0.0.0 --port $PORT` |
+| `PYTHON_VERSION` | `3.11.9` |
+| Secrets | `OPENROUTER_API_KEY`, `QDRANT_URL`, `QDRANT_API_KEY` as dashboard env vars |
+
+`$PORT` is supplied by Render; do not set it yourself. The vector index lives in
+Qdrant Cloud rather than in the image, so re-ingesting the corpus never requires
+a redeploy — and the container ships no model weights and no index, only client
+code.
+
+**Free-tier behaviour worth knowing.** The instance sleeps after 15 minutes idle
+and cold-starts in ~50s, so the first request after a quiet period is slow. The
+filesystem is ephemeral: `logs/app.jsonl` and the in-process trace store are both
+wiped on restart, leaving stdout in the Render dashboard as the only log view.
+
+---
+
 ## Configuration
 
 All settings live in `app/config.py` and load from `.env`. See `.env.example`.
@@ -581,6 +607,14 @@ the LLM is scripted. Coverage focuses on the properties that matter:
   reporting `503` honestly
 - **Reranking degrades, never fails** — a reranker that raises or times out
   leaves retrieval working on the fused order
+- **Intent routing** — a greeting never reaches the embedder, store or reranker
+  (they raise if called), and `"Hi, can we guarantee a fixed return?"` still gets
+  a full assessment
+- **Batched embeddings fall back** — a raising *or truncated* batch response
+  reverts to per-sub-query calls, since a short batch would otherwise pair
+  vectors with the wrong queries
+- **Tests never write to the production log** — asserted per-test, because that
+  regression is silent
 
 ---
 
@@ -593,12 +627,14 @@ app/
   schemas.py           Public request/response contract
   agent/
     graph.py           StateGraph wiring, conditional edges
-    nodes.py           The six node functions
+    state.py           AgentState TypedDict threaded through the nodes
+    nodes.py           The six node functions + the two routing functions
     verdict.py         Deterministic verdict rules
     prompts.py         Versioned prompt templates
     llm.py             OpenRouter client, fallback chain, JSON repair
   rag/
     aaoifi.py          AAOIFI PDF extractor (span dedup, clause hierarchy)
+    pdf_loader.py      Generic PDF text extraction (demo corpus)
     chunking.py        Chunk model, contextual headers
     embedder.py        Embedder protocol; OpenRouter + offline hashing
     store.py           VectorStore protocol; Qdrant + in-memory
@@ -614,7 +650,9 @@ corpus/
   source/              Markdown sources for the demo corpus
 evals/golden_set.py    66 cases: coverage, near-miss, adversarial
 scripts/               ingest.py, eval_retrieval.py, build_corpus_pdfs.py
-tests/                 174 tests
+tests/
+  conftest.py          Redirects test logging away from logs/app.jsonl
+  test_*.py            174 tests
 ```
 
 ---
@@ -636,6 +674,11 @@ tests/                 174 tests
   repository.
 - **Appendices excluded.** The juristic reasoning behind each ruling is not
   indexed, so the agent can state a rule but not the reasoning behind it.
+- **Retrieval depends on the parse step naming the contract.** Describe a Salam
+  transaction without the word "Salam" and retrieval alone misses SS-10; the
+  pipeline recovers only because `parse_query` labels it. A parse error is
+  therefore a silent retrieval failure, and nothing currently measures parse
+  accuracy.
 - **The AAOIFI extractor has no dedicated tests.** The most intricate module —
   the one that produced a silent citation-corruption bug — is exercised only
   indirectly. The next extraction regression would be found the way the last one

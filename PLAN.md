@@ -1,11 +1,11 @@
 # Implementation Plan & Build Log — Sharia Compliance Agent
 
 **Status:** delivered. All ten phases complete, deployed at
-<https://sharia-compliance-agent.onrender.com>, 164 tests green.
+<https://sharia-compliance-agent.onrender.com>, 174 tests green.
 **Planned:** 2026-09-08 · **Completed:** 2026-09-09
 
 This document is kept as a record of what was planned and **where reality
-diverged from it**. Section 2 is the honest part: six decisions in the original
+diverged from it**. Section 2 is the honest part: eight decisions in the original
 plan turned out to be wrong, and the reasons are more informative than the plan
 itself. Deep architectural rationale lives in `DOCUMENTATION.md`; usage lives in
 `README.md`.
@@ -19,7 +19,9 @@ whether a proposed financial product or transaction is Sharia-compliant,
 returning a structured verdict (`COMPLIANT` / `NON_COMPLIANT` / `NEEDS_REVIEW`)
 with cited reasoning, exposed over a public REST API.
 
-**Delivered.** Unchanged from the original objective.
+**Delivered.** Unchanged from the original objective, with one addition: a
+message that is not a compliance question returns `IRRELEVANT` rather than being
+forced into one of the three assessment verdicts (divergence 7).
 
 ---
 
@@ -33,6 +35,8 @@ with cited reasoning, exposed over a public REST API.
 | 4 | **Docker image + `render.yaml` blueprint** | **Native Python runtime, configured in the Render dashboard** | Render builds Python natively from `requirements.txt`; a Dockerfile added a build step and an image to maintain for no benefit at this size. Neither file exists in the repo. |
 | 5 | **Retrieval smoke tests** — a handful of golden query/document pairs inside the pytest suite | **A standalone golden eval set** (now 66 cases) with its own runner (`scripts/eval_retrieval.py`) | Retrieval quality needed to be *measured and compared across configurations*, not merely asserted. Folding it into pytest would have made it a pass/fail gate rather than a metric, and it needs network access the offline suite deliberately avoids. |
 | 6 | Verdict rules: `CONDITIONAL` **or** `UNRESOLVED` → `NEEDS_REVIEW`, flat | **Findings vs open questions split**, with an ordered rule table | With a 1,973-clause corpus the model raised `UNRESOLVED` findings about anything the query was silent on — and every query is silent on something. The rule as planned made nothing ever `COMPLIANT`. See §5. |
+| 7 | Three verdicts, per the brief | **A fourth, `IRRELEVANT`** | Greetings and off-topic messages returned `NEEDS_REVIEW`, which is a work queue: it told a reviewer a hello needed their judgement and corrupted the `NEEDS_REVIEW` rate the eval treats as a degeneracy alarm. The three assessment outcomes are unchanged; `IRRELEVANT` records that nothing was assessed. |
+| 8 | Scope checked once, implicitly | **An LLM intent router on the first node** | `parse_query` classifies GREETING / ASSESSMENT / OTHER and only ASSESSMENT reaches retrieval. A keyword list was built first and discarded — see §4. |
 
 Two planned items were **not built** and are recorded as cuts in
 `DOCUMENTATION.md` §6: durable trace storage and the offline replay harness.
@@ -140,8 +144,9 @@ a binding constraint, as expected.
   1. parse_query        LLM #1: extract product structure and features,
                         check scope.
                                 |
-  1b.[conditional]      Out of scope? Straight to decide_verdict, skipping
-                        planning, embedding, search and reranking.
+  1b.[conditional]      Intent GREETING or OTHER? Straight to decide_verdict
+                        as IRRELEVANT, skipping planning, embedding, search
+                        and reranking entirely.
                                 |
   2. plan_retrieval     Derive 2-4 sub-queries, each grounded in the
                         product name (pure Python + templates).
@@ -205,6 +210,26 @@ between rows holds, the absolutes are a snapshot):
 Neither half helps alone. Shipped separately, either would have looked like a
 no-op and been reverted — which is the clearest argument in this project for
 building the eval set *before* tuning.
+
+### The intent router — unplanned, and it changed the response contract
+
+The plan had no concept of a message that is not a question. Everything was an
+assessment, so a greeting was parsed, planned, embedded, searched, reranked and
+then labelled NEEDS_REVIEW.
+
+Two changes followed. `parse_query` became a router, classifying each message as
+GREETING, ASSESSMENT or OTHER, with only ASSESSMENT continuing to retrieval. A
+deterministic greeting word list was built first and discarded: it cannot cover
+other languages, transliterated salutations, typos or informal phrasing without
+growing without limit, and each word added widens the chance of swallowing a real
+query. The LLM classification rides on the parse call that already runs, so it
+costs nothing extra; the word list only ever saved one call on the cheapest path
+in the system.
+
+Then the verdict enum gained `IRRELEVANT`, a deliberate deviation from the
+brief's three verdicts. `NEEDS_REVIEW` is a work queue, and putting greetings in
+it mixes noise into the exact population a reviewer works from. The three
+assessment outcomes are untouched; `IRRELEVANT` says no assessment happened.
 
 ### The scope short-circuit — the plan was right, the build was not
 
@@ -319,7 +344,7 @@ corpus/
   source/             Markdown sources for the demo corpus
 evals/golden_set.py   66 cases: coverage, near-miss, adversarial
 scripts/              ingest.py, eval_retrieval.py, build_corpus_pdfs.py
-tests/                164 tests
+tests/                174 tests
 requirements.txt      Runtime only
 requirements-ingest.txt   Adds PyMuPDF + ReportLab for offline extraction
 .env.example
@@ -410,7 +435,7 @@ string.
 
 ## 9. Testing — as built
 
-164 tests, ~8s, no network and no credentials. The in-memory store implements the
+174 tests, ~8s, no network and no credentials. The in-memory store implements the
 same protocol as Qdrant, a deterministic hashing embedder stands in for the API,
 and the LLM is scripted.
 
@@ -440,6 +465,11 @@ network access the offline suite deliberately avoids.
 Current: **recall 0.985, recall@1 0.833, MRR 0.890, precision 0.733**,
 out-of-scope max score 0.255 against a 0.35 threshold. Broken out by kind:
 coverage 1.000 (50 cases), near-miss 0.875 (8), adversarial 1.000 (8).
+
+**Unplanned:** `tests/conftest.py` redirects the suite's logging to a temp path.
+Tests shared the production log, so each run appended ~168 lines of scripted
+output to `logs/app.jsonl` until the file no longer resembled the system it was
+meant to demonstrate. A fixture now asserts the production log is untouched.
 
 **Not built:** the live smoke test against real endpoints, and
 `tests/test_aaoifi.py` — the highest-risk module is still exercised only
