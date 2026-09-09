@@ -337,10 +337,20 @@ Four stages, each added to fix a measured failure:
 ```
 query
   → 2–4 grounded sub-queries      anchored to the product, not bare concepts
-  → vector search, top_k=10 each  text-embedding-3-large (3072-d), Qdrant
+  → one batched embedding call    all sub-queries together (3072-d)
+  → vector search, top_k=10 each  Qdrant
   → RRF fusion, K=60              rank-based, not score-based
   → cross-encoder rerank, 24 → 8  voyageai/rerank-2.5
 ```
+
+**Embeddings are batched.** Sub-queries were embedded one per call — four
+sequential round trips where one would do. Measured live: 1,925 ms sequential
+against 594 ms batched, about **1.3s off every assessment**. It saves no money
+(embeddings are billed per token, and the token count is identical) — the win is
+latency and rate-limit headroom. Falls back to individual calls if the batch
+fails *or returns the wrong number of vectors*, since a truncated response would
+otherwise pair vectors with the wrong sub-queries and silently retrieve for text
+nobody asked about.
 
 **Sub-queries are grounded in the product.** An early version emitted bare
 concept names, so a savings-account question produced the sub-query `"riba"` and
@@ -359,15 +369,35 @@ failed assessment.
 
 ### Measured retrieval quality
 
-`evals/golden_set.py` pairs 22 queries with the AAOIFI standards a competent
+`evals/golden_set.py` pairs 66 queries with the AAOIFI standards a competent
 reviewer would consult, plus 3 out-of-scope queries. It runs the real retrieval
 path with **no LLM in the loop**, so a regression can be attributed without model
 variance confounding it:
 
 ```bash
-python scripts/eval_retrieval.py              # ~30s
+python scripts/eval_retrieval.py              # ~90s
 python scripts/eval_retrieval.py --no-rerank  # compare configurations
 ```
+
+Cases carry a **kind**, because an aggregate hides what matters:
+
+| Kind | Cases | What a miss means | Recall |
+|---|---|---|---|
+| `coverage` | 50 | A topic is unreachable | **1.000** |
+| `near_miss` | 8 | Retrieval keys on vocabulary, not the transaction | **0.875** |
+| `adversarial` | 8 | A euphemised prohibition never reached the model | **1.000** |
+
+Aggregate: **recall 0.985, recall@1 0.833, MRR 0.890, precision 0.733**. All 54
+standards are covered. Out-of-scope queries top out at **0.255** against a 0.35
+coverage threshold, which is what makes that threshold a usable `NEEDS_REVIEW`
+signal rather than a guess.
+
+**The set is not meant to sit at 1.000.** It did, at 22 cases — which says the
+suite has stopped measuring, not that the system is perfect. The adversarial and
+near-miss cases sit deliberately at the edge of what retrieval can currently do.
+
+**How the current configuration was chosen** (measured on the 22-case set, so the
+absolute numbers are a snapshot; the comparison between rows is what matters):
 
 | Configuration | Recall | MRR | Latency/query |
 |---|---|---|---|
@@ -381,9 +411,14 @@ candidate pool, so the reranker has nothing to promote; at k=10 without rerankin
 it enters but sits below the cutoff. Shipped separately, either would have looked
 like a no-op.
 
-Out-of-scope queries top out at **0.255** against a 0.35 coverage threshold,
-which is what makes that threshold a usable `NEEDS_REVIEW` signal rather than a
-guess.
+**The one standing miss names a real dependency.** Ask *"what conditions apply to
+a Salam contract"* and retrieval returns 6 of 8 hits from SS-10. Describe the
+identical transaction the way a business proposal would — *"the customer pays the
+full price now and we deliver the wheat in six months"* — and it returns none. In
+the full pipeline `parse_query` labels it `"salam sale"` and SS-10 comes back at
+rank 2, so this is not broken in production. But retrieval is being carried by
+the LLM's contract-type labelling rather than by the description, which turns a
+parse error into a silent retrieval failure. The case is kept failing on purpose.
 
 > These pairs were written by an engineer reading the corpus, not by a Sharia
 > scholar. They detect retrieval regressions and compare retrieval strategies.
@@ -435,7 +470,7 @@ above; the pair takes recall from 0.955 to 1.000, and neither half helps alone.
 ## Testing
 
 ```bash
-pytest -q            # 156 tests, ~8s, no network, no credentials
+pytest -q            # 161 tests, ~8s, no network, no credentials
 ```
 
 The suite runs entirely offline: an in-memory vector store implements the same
@@ -484,9 +519,9 @@ corpus/
   pdf/                 The real AAOIFI Shari'ah Standards (EN + AR)
   demo/                Synthesised corpus, so a clone runs without them
   source/              Markdown sources for the demo corpus
-evals/golden_set.py    22 query → expected-standard pairs
+evals/golden_set.py    66 cases: coverage, near-miss, adversarial
 scripts/               ingest.py, eval_retrieval.py, build_corpus_pdfs.py
-tests/                 156 tests
+tests/                 161 tests
 ```
 
 ---

@@ -1,7 +1,7 @@
 # Implementation Plan & Build Log — Sharia Compliance Agent
 
 **Status:** delivered. All ten phases complete, deployed at
-<https://sharia-compliance-agent.onrender.com>, 156 tests green.
+<https://sharia-compliance-agent.onrender.com>, 161 tests green.
 **Planned:** 2026-09-08 · **Completed:** 2026-09-09
 
 This document is kept as a record of what was planned and **where reality
@@ -31,12 +31,16 @@ with cited reasoning, exposed over a public REST API.
 | 2 | `text-embedding-3-small`, 1536 dims | **`text-embedding-3-large`, 3072 dims** | Retrieval quality is the binding constraint on verdict quality, and the cost difference on a 147K-token corpus is under two cents. |
 | 3 | **Single-stage vector search**, top_k=5 | **Grounded sub-queries → RRF fusion → cross-encoder rerank**, top_k=10 | A live query retrieved the general riba prohibition instead of the deposit rules that govern it. Diagnosis via trace showed a retrieval failure, not a reasoning one. See §4. |
 | 4 | **Docker image + `render.yaml` blueprint** | **Native Python runtime, configured in the Render dashboard** | Render builds Python natively from `requirements.txt`; a Dockerfile added a build step and an image to maintain for no benefit at this size. Neither file exists in the repo. |
-| 5 | **Retrieval smoke tests** — a handful of golden query/document pairs inside the pytest suite | **A standalone 22-case golden eval set** with its own runner (`scripts/eval_retrieval.py`) | Retrieval quality needed to be *measured and compared across configurations*, not merely asserted. Folding it into pytest would have made it a pass/fail gate rather than a metric, and it needs network access the offline suite deliberately avoids. |
+| 5 | **Retrieval smoke tests** — a handful of golden query/document pairs inside the pytest suite | **A standalone golden eval set** (now 66 cases) with its own runner (`scripts/eval_retrieval.py`) | Retrieval quality needed to be *measured and compared across configurations*, not merely asserted. Folding it into pytest would have made it a pass/fail gate rather than a metric, and it needs network access the offline suite deliberately avoids. |
 | 6 | Verdict rules: `CONDITIONAL` **or** `UNRESOLVED` → `NEEDS_REVIEW`, flat | **Findings vs open questions split**, with an ordered rule table | With a 1,973-clause corpus the model raised `UNRESOLVED` findings about anything the query was silent on — and every query is silent on something. The rule as planned made nothing ever `COMPLIANT`. See §5. |
 
-Three planned items were **not built** and are recorded as cuts in
-`DOCUMENTATION.md` §6: durable trace storage, the offline replay harness, and
-batched sub-query embeddings.
+Two planned items were **not built** and are recorded as cuts in
+`DOCUMENTATION.md` §6: durable trace storage and the offline replay harness.
+
+Two things the plan never contemplated were added after it: **batched sub-query
+embeddings** (§4, worth ~1.3s per assessment) and the **near-miss and adversarial
+eval categories** (§9), the second of which immediately found a retrieval
+dependency the plan had no concept of.
 
 ---
 
@@ -139,8 +143,9 @@ a binding constraint, as expected.
   2. plan_retrieval     Derive 2-4 sub-queries, each grounded in the
                         product name (pure Python + templates).
                                 |
-  3. retrieve           Embed sub-queries, search Qdrant top_k=10 each,
-                        fuse by reciprocal rank (K=60), rerank 24 -> 8.
+  3. retrieve           Embed all sub-queries in one batched call, search
+                        Qdrant top_k=10 each, fuse by reciprocal rank
+                        (K=60), rerank 24 -> 8.
                                 |
   4. [conditional]      Weak retrieval? Broaden queries, loop once (max 1).
                                 |
@@ -168,17 +173,24 @@ annual return?"* — it returned the general riba prohibition rather than the
 deposit rules that actually govern the case. The trace showed why: the planner
 had emitted the bare sub-query `"riba"`.
 
-Three fixes, in order:
+Four fixes, in order — the first two for correctness, the third for latency,
+the fourth for ranking quality:
 
 1. **Grounded sub-queries.** Anchor each sub-query to the product —
    `"savings account guaranteed return"`, not `"riba"`.
 2. **Rank fusion instead of score merging.** Similarity scores from different
    sub-queries are not on a common scale, so averaging them is arithmetic on
    incomparable numbers. RRF (K=60) uses only within-query rank.
-3. **Cross-encoder reranking over a wider pool.** top_k 5 → 10 with
+3. **Batched embeddings.** All sub-queries in one call rather than four
+   sequential ones: 1,925 ms → 594 ms measured live, ~1.3s off every
+   assessment. Purely latency — embeddings bill per token, so the cost is
+   unchanged.
+4. **Cross-encoder reranking over a wider pool.** top_k 5 → 10 with
    `voyageai/rerank-2.5` reranking 24 candidates down to 8.
 
-Measured on the golden set, the third fix is only worth it as a pair:
+Measured on the golden set, the fourth fix is only worth it paired with the
+wider pool (numbers from the 22-case set that existed then; the comparison
+between rows holds, the absolutes are a snapshot):
 
 | Configuration | Recall | MRR | Latency/query |
 |---|---|---|---|
@@ -284,9 +296,9 @@ corpus/
   pdf/                The real AAOIFI standards (EN + AR)
   demo/               Synthesised corpus, so a clone runs without them
   source/             Markdown sources for the demo corpus
-evals/golden_set.py   22 query -> expected-standard pairs
+evals/golden_set.py   66 cases: coverage, near-miss, adversarial
 scripts/              ingest.py, eval_retrieval.py, build_corpus_pdfs.py
-tests/                156 tests
+tests/                161 tests
 requirements.txt      Runtime only
 requirements-ingest.txt   Adds PyMuPDF + ReportLab for offline extraction
 .env.example
@@ -377,7 +389,7 @@ string.
 
 ## 9. Testing — as built
 
-156 tests, ~8s, no network and no credentials. The in-memory store implements the
+161 tests, ~8s, no network and no credentials. The in-memory store implements the
 same protocol as Qdrant, a deterministic hashing embedder stands in for the API,
 and the LLM is scripted.
 
@@ -399,13 +411,14 @@ and the LLM is scripted.
   than fails** when the reranker raises or the transport errors
 
 **Divergence #5:** the planned "retrieval smoke tests" became a standalone eval
-set (`evals/golden_set.py`, 22 cases + 3 out-of-scope) run by
+set (`evals/golden_set.py`, 66 cases + 3 out-of-scope) run by
 `scripts/eval_retrieval.py`, outside pytest. Retrieval quality needed to be a
 *measurement comparable across configurations*, not a boolean gate — and it needs
 network access the offline suite deliberately avoids.
 
-Current: **recall 1.000, recall@1 0.909, MRR 0.924, precision 0.790**,
-out-of-scope max score 0.255 against a 0.35 threshold.
+Current: **recall 0.985, recall@1 0.833, MRR 0.890, precision 0.733**,
+out-of-scope max score 0.255 against a 0.35 threshold. Broken out by kind:
+coverage 1.000 (50 cases), near-miss 0.875 (8), adversarial 1.000 (8).
 
 **Not built:** the live smoke test against real endpoints, and
 `tests/test_aaoifi.py` — the highest-risk module is still exercised only
