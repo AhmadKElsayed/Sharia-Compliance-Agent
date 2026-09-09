@@ -25,7 +25,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.agent.nodes import AgentDeps, plan_retrieval, retrieve  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from app.rag.ingest import build_embedder, build_store  # noqa: E402
-from evals.golden_set import GOLDEN_SET, OUT_OF_SCOPE  # noqa: E402
+from evals.golden_set import (  # noqa: E402
+    ADVERSARIAL,
+    COVERAGE,
+    GOLDEN_SET,
+    NEAR_MISS,
+    OUT_OF_SCOPE,
+)
 
 
 def evaluate(deps: AgentDeps, verbose: bool = False) -> dict[str, float]:
@@ -34,6 +40,10 @@ def evaluate(deps: AgentDeps, verbose: bool = False) -> dict[str, float]:
     precisions: list[float] = []
     latencies: list[float] = []
     failures: list[str] = []
+    # Per-kind tallies. A coverage miss and an adversarial miss mean different
+    # things -- the first says a topic is unreachable, the second says a
+    # euphemised prohibition slipped past -- so an aggregate hides the signal.
+    by_kind: dict[str, list[int]] = {}
 
     for gold in GOLDEN_SET:
         # The planner needs parsed structure, which normally comes from the LLM.
@@ -55,7 +65,8 @@ def evaluate(deps: AgentDeps, verbose: bool = False) -> dict[str, float]:
         docs = [h.doc_id for h in state.get("hits", [])]
         relevant = [d in gold.expected for d in docs]
 
-        if any(relevant):
+        found = any(relevant)
+        if found:
             hits_any += 1
             rank = relevant.index(True) + 1
             reciprocal_ranks.append(1.0 / rank)
@@ -65,13 +76,19 @@ def evaluate(deps: AgentDeps, verbose: bool = False) -> dict[str, float]:
                 hits_at_3 += 1
         else:
             reciprocal_ranks.append(0.0)
-            failures.append(f"{gold.query[:62]}  want {sorted(gold.expected)} got {docs[:4]}")
+            failures.append(
+                f"[{gold.kind}] {gold.query[:58]}  want {sorted(gold.expected)} got {docs[:4]}"
+            )
+
+        tally = by_kind.setdefault(gold.kind, [0, 0])
+        tally[0] += int(found)
+        tally[1] += 1
 
         precisions.append(sum(relevant) / len(relevant) if relevant else 0.0)
 
         if verbose:
-            mark = "OK  " if any(relevant) else "MISS"
-            print(f"  {mark} {gold.query[:64]}")
+            mark = "OK  " if found else "MISS"
+            print(f"  {mark} [{gold.kind}] {gold.query[:58]}")
             print(f"       want {sorted(gold.expected)}  got {docs}")
 
     # Out-of-scope queries should score low enough to trip the coverage rule.
@@ -95,6 +112,8 @@ def evaluate(deps: AgentDeps, verbose: bool = False) -> dict[str, float]:
         "latency_s": sum(latencies) / n,
         "oos_max_score": max(oos_scores) if oos_scores else 0.0,
     }
+    for kind, (found, total) in by_kind.items():
+        results[f"recall_{kind}"] = found / total if total else 0.0
 
     if failures:
         print("\n  misses:")
@@ -144,6 +163,13 @@ def main() -> int:
     print(f"  latency/query     : {results['latency_s']:.2f}s")
     print(f"  out-of-scope max  : {results['oos_max_score']:.3f} "
           f"(threshold {settings.retrieval_score_threshold})")
+
+    print("\n  recall by kind:")
+    for kind in (COVERAGE, NEAR_MISS, ADVERSARIAL):
+        key = f"recall_{kind}"
+        if key in results:
+            n = sum(1 for c in GOLDEN_SET if c.kind == kind)
+            print(f"    {kind:12} : {results[key]:.3f}  ({n} cases)")
     return 0
 
 
