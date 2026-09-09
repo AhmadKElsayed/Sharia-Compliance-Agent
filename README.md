@@ -367,6 +367,25 @@ construction.
 back to the fused order and records the degradation — a degraded ranking beats a
 failed assessment.
 
+### Latency
+
+Where an assessment actually spends its time:
+
+| Stage | Time | |
+|---|---|---|
+| `parse_query` | 3–8s | LLM call 1 |
+| `retrieve` | ~1.9s | 0.6s embed (batched) · 0.7s search · 0.6s rerank |
+| `assess` | 5–15s | LLM call 2 |
+| `verify` + `decide_verdict` | <1ms | pure Python |
+| **total** | **9–25s** | |
+
+**The two LLM calls are ~90% of it.** Retrieval is under two seconds, which is
+why the tuning in this section is about quality rather than speed — and why the
+production fix in the trade-offs document is async request handling, not a faster
+retriever.
+
+Add ~50s to the first request after idle: the free Render instance sleeps.
+
 ### Measured retrieval quality
 
 `evals/golden_set.py` pairs 66 queries with the AAOIFI standards a competent
@@ -375,9 +394,12 @@ path with **no LLM in the loop**, so a regression can be attributed without mode
 variance confounding it:
 
 ```bash
-python scripts/eval_retrieval.py              # ~90s
+python scripts/eval_retrieval.py              # ~90s for all 66 cases
 python scripts/eval_retrieval.py --no-rerank  # compare configurations
 ```
+
+*That 90s is the whole run — ~1.3s per case. A single user assessment takes
+9–25s, dominated by the two LLM calls the eval deliberately skips.*
 
 Cases carry a **kind**, because an aggregate hides what matters:
 
