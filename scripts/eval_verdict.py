@@ -36,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.agent.graph import build_graph, initial_state  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from evals.verdict_set import (  # noqa: E402
+    CLEAR_COMPLIANT,
     COMPLIANT,
     NEEDS_REVIEW,
     NON_COMPLIANT,
@@ -104,6 +105,44 @@ class Outcome:
     @property
     def stable(self) -> bool:
         return len(set(self.verdicts)) <= 1
+
+    def scorecard(self) -> list[tuple[str, bool, str]]:
+        """One point per criterion the agent satisfied.
+
+        Two points rather than one, because a verdict can be right in two
+        different ways and only rewarding the label hides the difference. A
+        prohibition that comes back NEEDS_REVIEW is not approved -- it earns the
+        verdict point -- but it did not tell the reviewer anything, so it does
+        not earn the second. The mirror holds for a clear permission referred to
+        a human.
+
+        What counts as decisive is stratum-specific, because the *desired*
+        behaviour differs: name a prohibition, approve a clear permission, and
+        decline to resolve a borderline case.
+        """
+        rows = [("verdict", self.accepted, "returned an acceptable verdict")]
+
+        if self.case.stratum == OUT_OF_SCOPE:
+            rows.append(("no retrieval", not self.retrieved, "answered without retrieving"))
+            return rows
+
+        if self.case.forbidden:
+            rows.append(("named it", self.verdict == NON_COMPLIANT, "named the prohibition"))
+        elif self.case.stratum == CLEAR_COMPLIANT:
+            rows.append(("decided", self.verdict == COMPLIANT, "approved a clear permission"))
+        else:
+            rows.append(("deferred", self.verdict == NEEDS_REVIEW, "left a borderline case open"))
+
+        rows.append(("grounded", self.grounded, "cited a governing standard"))
+        return rows
+
+    @property
+    def points(self) -> int:
+        return sum(1 for _, earned, _ in self.scorecard() if earned)
+
+    @property
+    def possible(self) -> int:
+        return len(self.scorecard())
 
 
 def run_case(case: VerdictCase, graph, repeat: int) -> Outcome:
@@ -222,17 +261,44 @@ def report(outcomes: list[Outcome], repeat: int, verbose: bool) -> dict:
             f"max {ordered[-1]:.1f}s"
         )
 
-    print("\n  by stratum")
-    print(f"    {'stratum':<18} {'n':>3} {'accepted':>9} {'false-COMPLIANT':>17}")
+    earned = sum(o.points for o in outcomes)
+    possible = sum(o.possible for o in outcomes)
+    print(f"\n  SCORE                {earned}/{possible} = {earned / max(1, possible):.3f}")
+
+    print("\n  score by stratum")
+    header = f"    {'stratum':<18} {'n':>3} {'score':>10} {'pct':>7} {'false-COMPL':>13}"
+    print(header)
     for stratum in STRATA:
         group = by_stratum.get(stratum, [])
         if not group:
             continue
-        ok = sum(o.accepted for o in group)
+        got = sum(o.points for o in group)
+        top = sum(o.possible for o in group)
         bad = sum(o.is_false_compliant for o in group)
         risk = sum(1 for o in group if o.case.forbidden)
         risk_cell = f"{bad}/{risk}" if risk else "-"
-        print(f"    {stratum:<18} {len(group):>3} {ok:>4}/{len(group):<4} {risk_cell:>17}")
+        pct = got / max(1, top)
+        print(f"    {stratum:<18} {len(group):>3} {got:>5}/{top:<4} {pct:>7.3f} {risk_cell:>13}")
+
+    print("\n  points by criterion")
+    criteria: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+    for outcome in outcomes:
+        for name, won, _ in outcome.scorecard():
+            criteria[name][1] += 1
+            criteria[name][0] += int(won)
+    for name, (won, total) in criteria.items():
+        print(f"    {name:<14} {won:>3}/{total:<3} = {won / max(1, total):.3f}")
+
+    print("\n  every case")
+    for stratum in STRATA:
+        group = by_stratum.get(stratum, [])
+        if not group:
+            continue
+        print(f"\n    -- {stratum} --")
+        for outcome in sorted(group, key=lambda o: -o.points):
+            missed = [n for n, won, _ in outcome.scorecard() if not won]
+            tail = f"   missed: {', '.join(missed)}" if missed else ""
+            print(f"    {outcome.points}/{outcome.possible}  {outcome.verdict:<14} {outcome.case.query[:62]}{tail}")
 
     failures = [o for o in outcomes if not o.accepted]
     if failures:
@@ -255,7 +321,9 @@ def report(outcomes: list[Outcome], repeat: int, verbose: bool) -> dict:
             print(f"    {flag} {outcome.verdict:<14} {outcome.case.query[:70]}")
 
     return {
-        "cases": len(outcomes),
+        "score": earned,
+        "score_possible": possible,
+        "case_count": len(outcomes),
         "repeat": repeat,
         "scholar_reviewed": SCHOLAR_REVIEWED,
         "false_compliant": len(false_compliant),
@@ -273,6 +341,21 @@ def report(outcomes: list[Outcome], repeat: int, verbose: bool) -> dict:
             }
             for s, g in by_stratum.items()
         },
+        "cases": [
+            {
+                "query": o.case.query,
+                "stratum": o.case.stratum,
+                "authority": o.case.authority,
+                "expected": sorted(o.case.accept),
+                "verdicts": o.verdicts,
+                "rules": o.rules,
+                "cited": sorted(o.cited),
+                "accepted": o.accepted,
+                "detected": o.detected,
+                "false_compliant": o.is_false_compliant,
+            }
+            for o in outcomes
+        ],
         "failures": [
             {
                 "query": o.case.query,
