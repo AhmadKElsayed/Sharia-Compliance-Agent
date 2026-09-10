@@ -30,3 +30,6 @@ DOCUMENTATION.md
 #   https://aaoifi.com/shariah-standards-3/?lang=en
 # See README "Corpus" for where to put them.
 corpus/pdf/*.pdf
+
+# Long-form working notes; DESIGN.md is the deliverable.
+DOCUMENTATION.pdf
