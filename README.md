@@ -22,6 +22,11 @@ required
 > requires review by a qualified Sharia reviewer. It does not substitute for
 > Sharia Supervisory Board approval.
 
+**Design document:** [`DESIGN.pdf`](DESIGN.pdf) — architecture decisions and what
+was ruled out, scaling to 50,000 queries/day, the eval framework, observability,
+CBUAE/PDPL risks, and what was cut. Rendered from [`DESIGN.md`](DESIGN.md) by
+`scripts/build_documentation_pdf.py`, so the two cannot drift apart.
+
 ---
 
 ## What it does
@@ -575,17 +580,42 @@ python scripts/eval_verdict.py --repeat 3          # also measure stability
 
 Measured:
 
-| Metric | Result |
-|---|---|
-| **False `COMPLIANT`** | **0 / 20** — no prohibited or adversarial case was approved |
-| Accepted verdict | 42 / 45 |
-| Citation grounding | 40 / 40 — every assessment cited a governing standard |
-| Out-of-scope leaked to retrieval | 0 / 5 |
-| Over-flagged | **3 / 10** clear permissions returned `NEEDS_REVIEW` |
+Scoring awards a point per criterion satisfied, so a case that is right in more
+than one way outscores one that merely avoids being wrong:
 
-The false-`COMPLIANT` rate is reported separately from accuracy on purpose:
-approving a prohibition and over-referring a permissible product are not errors
-of the same kind, and must never cancel out in one number.
+| Criterion | What it rewards | Score |
+|---|---|---|
+| `grounded` | Cited a governing standard | **0.975** |
+| `verdict` | Returned a verdict a reviewer would accept | **0.933** |
+| `named it` | Named the prohibition, not just declined to approve | **0.900** |
+| `decided` | Approved a clear permission | **0.700** |
+| `deferred` | Left a borderline case open | **0.700** |
+| `no retrieval` | Answered a non-question without retrieving | **1.000** |
+| | **Overall 118 / 130** | **0.908** |
+
+| Stratum | n | Score | |
+|---|---|---|---|
+| `out_of_scope` | 5 | 10/10 | 1.000 |
+| `clear_prohibited` | 12 | 35/36 | 0.972 |
+| `adversarial` | 8 | 23/24 | 0.958 |
+| `borderline` | 10 | 26/30 | 0.867 |
+| `clear_compliant` | 10 | 24/30 | 0.800 |
+
+**False `COMPLIANT`: 0 / 20**, reported separately and never tradeable against
+points earned elsewhere — approving a prohibition and over-referring a
+permissible product are not errors of the same kind, and must never cancel out
+in one number.
+
+**But that zero is weaker than it looks, and saying so matters more than the
+number.** Twenty cases is small enough that zero failures is still consistent
+with a true rate of **13.9%** by the rule of three — roughly 7,000 bad approvals
+a day at target volume. It is also saturated, so it can only detect regression;
+the cases are textbook single-clause prohibitions rather than the compound
+structures real proposals use; and it was authored by the person who built the
+system. The runner therefore reports a **prohibition detection rate** alongside
+it — cases actually returned as `NON_COMPLIANT`, not merely not approved —
+because a system that referred every prohibition to a human would score a
+perfect 0.000 while telling the reviewer nothing.
 
 **The over-flag rate is the real finding.** Three plainly permissible products —
 a Murabaha where the bank takes delivery before selling, a Salam with the price
@@ -677,7 +707,7 @@ above; the pair takes recall from 0.955 to 1.000, and neither half helps alone.
 ## Testing
 
 ```bash
-pytest -q            # 174 tests, ~8s, no network, no credentials
+pytest -q            # 185 tests, ~8s, no network, no credentials
 ```
 
 The suite runs entirely offline: an in-memory vector store implements the same
@@ -736,12 +766,15 @@ corpus/
   pdf/                 Where you place the licensed AAOIFI PDFs (git-ignored)
   demo/                Synthesised corpus, so a clone runs without them
   source/              Markdown sources for the demo corpus
-evals/golden_set.py    66 cases: coverage, near-miss, adversarial
+evals/
+  golden_set.py        66 retrieval cases: coverage, near-miss, adversarial
+  verdict_set.py       45 verdict cases in five strata, clause-anchored
 scripts/               ingest.py, eval_retrieval.py, eval_verdict.py,
-                       build_corpus_pdfs.py
+                       build_corpus_pdfs.py, build_documentation_pdf.py
+DESIGN.md / .pdf       The design document and its rendered form
 tests/
   conftest.py          Redirects test logging away from logs/app.jsonl
-  test_*.py            174 tests
+  test_*.py            185 tests
 ```
 
 ---
@@ -750,10 +783,14 @@ tests/
 
 - **Decision support only.** Not a Sharia ruling; requires review by a qualified
   reviewer and does not substitute for Sharia Supervisory Board approval.
-- **Verdict quality is unmeasured.** Retrieval is measured (above); verdict
-  correctness is not. That needs a scholar-authored eval set, and until it
-  exists the false-`COMPLIANT` rate — the one error that can cause real harm —
-  is unknown. This is the most valuable next investment.
+- **The verdict set is engineer-authored, not scholar-reviewed.** Verdict
+  quality is now measured (above) and the false-`COMPLIANT` rate is 0/20, but
+  the expectations are mine: every clause anchor is verified against the
+  published edition, while whether a scholar would agree with the expected
+  outcome on the ten borderline cases is not. `SCHOLAR_REVIEWED = False` is a
+  module constant and the runner prints it on every report, so no run can be
+  quoted as evidence of Sharia correctness by accident. A scholar-authored set
+  of ~300 cases is still the most valuable next investment.
 - **Verdicts are not fully deterministic.** On one borderline query, five
   identical runs produced two `COMPLIANT` and three `NEEDS_REVIEW`.
 - **English only.** Arabic is the authoritative AAOIFI text, so the system
