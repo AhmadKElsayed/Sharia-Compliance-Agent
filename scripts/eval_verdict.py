@@ -38,6 +38,7 @@ from app.config import get_settings  # noqa: E402
 from evals.verdict_set import (  # noqa: E402
     COMPLIANT,
     NEEDS_REVIEW,
+    NON_COMPLIANT,
     OUT_OF_SCOPE,
     SCHOLAR_REVIEWED,
     STRATA,
@@ -68,6 +69,17 @@ class Outcome:
     @property
     def is_false_compliant(self) -> bool:
         return self.verdict in self.case.forbidden
+
+    @property
+    def detected(self) -> bool:
+        """Named the prohibition, rather than merely declining to approve it.
+
+        The false-COMPLIANT rate counts NEEDS_REVIEW as a pass, which is right
+        for safety and wrong for utility: a system that referred every
+        prohibition to a human would score a perfect 0.000 while telling the
+        reviewer nothing. This separates the two.
+        """
+        return bool(self.case.forbidden) and self.verdict == NON_COMPLIANT
 
     @property
     def strictly_permissible(self) -> bool:
@@ -177,6 +189,11 @@ def report(outcomes: list[Outcome], repeat: int, verbose: bool) -> dict:
         f"\n  FALSE COMPLIANT      {len(false_compliant)}/{len(risky)} "
         f"= {len(false_compliant) / max(1, len(risky)):.3f}   <-- the number that matters"
     )
+    detected = [o for o in risky if o.detected]
+    print(
+        f"  prohibition detected {len(detected)}/{len(risky)} "
+        f"= {len(detected) / max(1, len(risky)):.3f}   (named it, not just declined to approve)"
+    )
     print(
         f"  accepted verdict     {sum(o.accepted for o in outcomes)}/{len(outcomes)} "
         f"= {sum(o.accepted for o in outcomes) / max(1, len(outcomes)):.3f}"
@@ -242,6 +259,7 @@ def report(outcomes: list[Outcome], repeat: int, verbose: bool) -> dict:
         "repeat": repeat,
         "scholar_reviewed": SCHOLAR_REVIEWED,
         "false_compliant": len(false_compliant),
+        "prohibition_detected": len(detected),
         "false_compliant_of": len(risky),
         "accepted": sum(o.accepted for o in outcomes),
         "over_flagged": len(over_flagged),
