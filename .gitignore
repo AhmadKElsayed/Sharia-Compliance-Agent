@@ -31,5 +31,3 @@ DOCUMENTATION.md
 # See README "Corpus" for where to put them.
 corpus/pdf/*.pdf
 
-# Long-form working notes; DESIGN.md is the deliverable.
-DOCUMENTATION.pdf
