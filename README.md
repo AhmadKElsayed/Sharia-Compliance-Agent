@@ -549,7 +549,61 @@ parse error into a silent retrieval failure. The case is kept failing on purpose
 
 > These pairs were written by an engineer reading the corpus, not by a Sharia
 > scholar. They detect retrieval regressions and compare retrieval strategies.
-> They do **not** certify verdict correctness.
+> They do **not** certify verdict correctness — that is what the verdict set
+> below measures, within its own stated limits.
+
+### Measured verdict quality
+
+`evals/verdict_set.py` holds 45 cases pairing a query with the outcome a reviewer
+would accept, each anchored to a clause **verified to exist in the published
+English edition**. Unlike the retrieval eval this runs the whole graph, so it
+costs real LLM calls:
+
+```bash
+python scripts/eval_verdict.py                     # ~4 min at 6 workers
+python scripts/eval_verdict.py --stratum adversarial
+python scripts/eval_verdict.py --repeat 3          # also measure stability
+```
+
+| Stratum | Cases | What a failure means |
+|---|---|---|
+| `clear_prohibited` | 12 | A prohibited structure was approved |
+| `clear_compliant` | 10 | A plainly permissible product was referred to a human |
+| `borderline` | 10 | Several verdicts are defensible; the system must not resolve confidently |
+| `adversarial` | 8 | A prohibition survived being dressed in approving language |
+| `out_of_scope` | 5 | A non-question reached retrieval |
+
+Measured:
+
+| Metric | Result |
+|---|---|
+| **False `COMPLIANT`** | **0 / 20** — no prohibited or adversarial case was approved |
+| Accepted verdict | 42 / 45 |
+| Citation grounding | 40 / 40 — every assessment cited a governing standard |
+| Out-of-scope leaked to retrieval | 0 / 5 |
+| Over-flagged | **3 / 10** clear permissions returned `NEEDS_REVIEW` |
+
+The false-`COMPLIANT` rate is reported separately from accuracy on purpose:
+approving a prohibition and over-referring a permissible product are not errors
+of the same kind, and must never cancel out in one number.
+
+**The over-flag rate is the real finding.** Three plainly permissible products —
+a Murabaha where the bank takes delivery before selling, a Salam with the price
+paid at contract, a charge-card deposit invested on Mudarabah — came back
+`NEEDS_REVIEW` under `conditional_findings`. That is the degeneracy the design
+warns about: an agent that refers everything informs nobody. It is the cost of
+the deliberate bias toward `NEEDS_REVIEW`, and it is now measured rather than
+suspected.
+
+**Instability is visible across runs.** Two consecutive full runs disagreed on
+one case (Takaful cover on Sukuk assets: `NEEDS_REVIEW`, then `COMPLIANT`), and
+the *rule* that fired changed on two others between `unresolved_findings` and
+`conditional_findings`. Run with `--repeat` to quantify it.
+
+> Same caveat, and it is the binding one: these expectations are
+> engineer-authored. `SCHOLAR_REVIEWED = False` in the module and the runner
+> prints it on every report. The strata, runner and metrics are the reusable
+> scaffold; the expectations are what a scholar-authored set would replace.
 
 ---
 
@@ -683,7 +737,8 @@ corpus/
   demo/                Synthesised corpus, so a clone runs without them
   source/              Markdown sources for the demo corpus
 evals/golden_set.py    66 cases: coverage, near-miss, adversarial
-scripts/               ingest.py, eval_retrieval.py, build_corpus_pdfs.py
+scripts/               ingest.py, eval_retrieval.py, eval_verdict.py,
+                       build_corpus_pdfs.py
 tests/
   conftest.py          Redirects test logging away from logs/app.jsonl
   test_*.py            174 tests
