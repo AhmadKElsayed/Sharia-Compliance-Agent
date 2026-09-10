@@ -54,7 +54,7 @@ CODE_BG = colors.HexColor("#f4f6f8")
 HEAD_BG = colors.HexColor("#eef2f6")
 
 PAGE_W, PAGE_H = A4
-MARGIN = 19 * mm
+MARGIN = 16 * mm
 CONTENT_W = PAGE_W - 2 * MARGIN
 
 # Consolas has no glyph for these; the diagrams read the same with ASCII.
@@ -90,11 +90,11 @@ def styles() -> dict[str, ParagraphStyle]:
     base = ParagraphStyle(
         "body",
         fontName=BODY,
-        fontSize=8.8,
-        leading=12.3,
+        fontSize=8.4,
+        leading=11.6,
         textColor=INK,
         alignment=TA_JUSTIFY,
-        spaceAfter=5,
+        spaceAfter=4,
     )
     return {
         "body": base,
@@ -107,19 +107,19 @@ def styles() -> dict[str, ParagraphStyle]:
             alignment=0, spaceAfter=2,
         ),
         "h1": ParagraphStyle(
-            "h1", parent=base, fontName=BODY + "-Bold", fontSize=14.5, leading=18,
-            textColor=ACCENT, alignment=0, spaceBefore=4, spaceAfter=7,
+            "h1", parent=base, fontName=BODY + "-Bold", fontSize=13.8, leading=17,
+            textColor=ACCENT, alignment=0, spaceBefore=3, spaceAfter=5,
         ),
         "h2": ParagraphStyle(
-            "h2", parent=base, fontName=BODY + "-Bold", fontSize=11.0, leading=14,
-            textColor=ACCENT, alignment=0, spaceBefore=2, spaceAfter=5,
+            "h2", parent=base, fontName=BODY + "-Bold", fontSize=10.5, leading=13,
+            textColor=ACCENT, alignment=0, spaceBefore=1, spaceAfter=4,
         ),
         "h3": ParagraphStyle(
             "h3", parent=base, fontName=BODY + "-Bold", fontSize=9.9, leading=13.5,
-            textColor=INK, alignment=0, spaceBefore=8, spaceAfter=4,
+            textColor=INK, alignment=0, spaceBefore=6, spaceAfter=3,
         ),
         "bullet": ParagraphStyle(
-            "bullet", parent=base, leftIndent=11, bulletIndent=2, spaceAfter=3.5,
+            "bullet", parent=base, leftIndent=11, bulletIndent=2, spaceAfter=2.5,
         ),
         "bullet2": ParagraphStyle(
             "bullet2", parent=base, leftIndent=24, bulletIndent=14, spaceAfter=3,
@@ -168,7 +168,7 @@ def inline(text: str) -> str:
     )
     text = INLINE_CODE.sub(
         lambda m: stash(
-            f'<font face="{MONO}" size="8.1" color="#8a3a1f">'
+            f'<font face="{MONO}" size="7.7" color="#8a3a1f">'
             f"{html.escape(m.group(1))}</font>"
         ),
         text,
@@ -290,8 +290,8 @@ GRAPH_NODES = [
 ]
 
 BOX_W = 232.0
-BOX_H = 25.0
-GAP = 13.0
+BOX_H = 17.5
+GAP = 7.0
 
 
 def _arrow(drawing, x1, y1, x2, y2, colour, dash=None):
@@ -316,7 +316,7 @@ def agent_graph(width: float) -> Drawing:
     height = rows * BOX_H + (rows - 1) * GAP + 34
     drawing = Drawing(width, height)
 
-    left_lane = 34.0
+    left_lane = 48.0
     box_x = 74.0
     right_lane = box_x + BOX_W + 54
 
@@ -382,11 +382,11 @@ def agent_graph(width: float) -> Drawing:
         [box_x, plan_mid, box_x - 6, plan_mid + 3.4, box_x - 6, plan_mid - 3.4],
         fillColor=loop, strokeColor=loop,
     ))
-    drawing.add(String(left_lane - 30, plan_mid + 12, "weak",
+    drawing.add(String(2, plan_mid + 12, "weak",
                        fontName=BODY + "-Bold", fontSize=6.2, fillColor=loop))
-    drawing.add(String(left_lane - 30, plan_mid + 4, "coverage:",
+    drawing.add(String(2, plan_mid + 4, "coverage:",
                        fontName=BODY, fontSize=6.2, fillColor=loop))
-    drawing.add(String(left_lane - 30, plan_mid - 4, "broaden once",
+    drawing.add(String(2, plan_mid - 4, "broaden once",
                        fontName=BODY, fontSize=6.2, fillColor=loop))
 
     legend_y = 6
@@ -457,7 +457,7 @@ def convert(md: str, st: dict[str, ParagraphStyle]) -> list:
             # A short table split across a page break strands a row under a
             # repeated header, which reads as a different table.
             flow.append(KeepTogether(table) if len(rows) <= 9 else table)
-            flow.append(Spacer(1, 9))
+            flow.append(Spacer(1, 6))
             continue
 
         if not stripped:
@@ -481,11 +481,11 @@ def convert(md: str, st: dict[str, ParagraphStyle]) -> list:
             if level == 1:
                 node = Paragraph(inline(text), st["h1"])
             elif level == 2:
-                flow.append(Spacer(1, 6))
+                flow.append(Spacer(1, 4))
                 node = KeepTogether(
                     [
                         HRFlowable(width="100%", thickness=0.7, color=ACCENT),
-                        Spacer(1, 5),
+                        Spacer(1, 3),
                         Paragraph(inline(text), st["h2"]),
                     ]
                 )
