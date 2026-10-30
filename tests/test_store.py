@@ -10,11 +10,18 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from qdrant_client.http.exceptions import ResponseHandlingException
 
 from app.rag.chunking import chunk_documents
 from app.rag.pdf_loader import load_pdf_corpus
 from app.rag.embedder import Embedder, HashingEmbedder, OpenRouterEmbedder
-from app.rag.store import InMemoryStore, QdrantStore, SearchHit, VectorStore
+from app.rag.store import (
+    UPSERT_ATTEMPTS,
+    InMemoryStore,
+    QdrantStore,
+    SearchHit,
+    VectorStore,
+)
 
 CORPUS_DIR = Path(__file__).resolve().parents[1] / "corpus" / "demo"
 
@@ -104,6 +111,51 @@ def test_upsert_rejects_mismatched_counts(populated: InMemoryStore) -> None:
     chunks = chunk_documents(load_pdf_corpus(CORPUS_DIR))
     with pytest.raises(ValueError, match="mismatch"):
         populated.upsert(chunks, [[0.0] * 256])
+
+
+class _FlakyClient:
+    """Records upserted batches, failing the first ``failures`` calls."""
+
+    def __init__(self, failures: int) -> None:
+        self.failures = failures
+        self.calls = 0
+        self.batches: list[int] = []
+
+    def upsert(self, collection_name: str, points: list, wait: bool) -> None:
+        self.calls += 1
+        if self.calls <= self.failures:
+            raise ResponseHandlingException(TimeoutError("write timed out"))
+        self.batches.append(len(points))
+
+
+def _qdrant_with(client: _FlakyClient) -> QdrantStore:
+    return QdrantStore(url="", api_key="", collection="c", client=client)
+
+
+def _chunks_and_vectors() -> tuple[list, list[list[float]]]:
+    chunks = chunk_documents(load_pdf_corpus(CORPUS_DIR))
+    return chunks, [[0.0] * 8 for _ in chunks]
+
+
+def test_qdrant_upsert_retries_a_stalled_batch(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.rag.store.time.sleep", lambda _: None)
+    client = _FlakyClient(failures=2)
+    chunks, vectors = _chunks_and_vectors()
+
+    assert _qdrant_with(client).upsert(chunks, vectors) == len(chunks)
+    assert sum(client.batches) == len(chunks), "a retried batch must not be lost"
+
+
+def test_qdrant_upsert_gives_up_after_the_last_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("app.rag.store.time.sleep", lambda _: None)
+    client = _FlakyClient(failures=UPSERT_ATTEMPTS)
+    chunks, vectors = _chunks_and_vectors()
+
+    with pytest.raises(ResponseHandlingException):
+        _qdrant_with(client).upsert(chunks, vectors)
+    assert client.calls == UPSERT_ATTEMPTS
 
 
 def test_ensure_collection_rejects_dimension_change(populated: InMemoryStore) -> None:

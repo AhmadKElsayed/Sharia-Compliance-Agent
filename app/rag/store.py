@@ -8,15 +8,21 @@ agent.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qmodels
+from qdrant_client.http.exceptions import ResponseHandlingException
 
 from app.rag.chunking import Chunk
 
-UPSERT_BATCH = 128
+# A 3072-dim vector is ~65 KB as JSON, so this is ~2 MB a request: small enough
+# not to stall a slow uplink against the free cluster.
+UPSERT_BATCH = 32
+UPSERT_ATTEMPTS = 5
+UPSERT_BACKOFF_SECONDS = 2.0
 
 
 @dataclass(frozen=True)
@@ -177,12 +183,26 @@ class QdrantStore:
         ]
 
         for start in range(0, len(points), UPSERT_BATCH):
-            self._client.upsert(
-                collection_name=self._collection,
-                points=points[start : start + UPSERT_BATCH],
-                wait=True,
-            )
+            self._upsert_batch(points[start : start + UPSERT_BATCH])
         return len(points)
+
+    def _upsert_batch(self, batch: list[qmodels.PointStruct]) -> None:
+        """Write one batch, retrying transport failures.
+
+        Retrying is safe because point IDs are deterministic, and it matters
+        because the vectors in hand were paid for: one stalled request must not
+        discard a whole ingest's embeddings.
+        """
+        for attempt in range(1, UPSERT_ATTEMPTS + 1):
+            try:
+                self._client.upsert(
+                    collection_name=self._collection, points=batch, wait=True
+                )
+                return
+            except ResponseHandlingException:
+                if attempt == UPSERT_ATTEMPTS:
+                    raise
+                time.sleep(UPSERT_BACKOFF_SECONDS * 2 ** (attempt - 1))
 
     def search(
         self, vector: list[float], top_k: int, score_threshold: float | None = None
