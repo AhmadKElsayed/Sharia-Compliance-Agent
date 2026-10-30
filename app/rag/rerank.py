@@ -47,7 +47,7 @@ class OpenRouterReranker:
     def __init__(
         self,
         api_key: str,
-        model: str = "voyageai/rerank-2.5",
+        model: str = "voyageai/rerank-3-lite",
         base_url: str = "https://openrouter.ai/api/v1",
         timeout: float = 30.0,
     ) -> None:

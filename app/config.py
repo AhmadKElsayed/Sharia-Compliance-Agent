@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     retrieval_score_threshold: float = 0.35
 
     rerank_enabled: bool = True
-    rerank_model: str = "voyageai/rerank-2.5"
+    rerank_model: str = "voyageai/rerank-3-lite"
     rerank_candidates: int = 24
 
     # --- Observability -----------------------------------------------------

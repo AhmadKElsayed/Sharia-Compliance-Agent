@@ -222,6 +222,10 @@ python scripts/ingest.py --dry-run   # parse and report, no network
 python scripts/ingest.py             # embed and upsert into Qdrant
 ```
 
+Uploads go in batches of 32, and a batch that hits a network failure is retried,
+so a stalled connection does not discard the embeddings. Re-running is safe: point
+IDs are deterministic, so it replaces in place rather than duplicating.
+
 Run the API:
 
 ```bash
@@ -450,7 +454,7 @@ query
   → one batched embedding call    all sub-queries together (3072-d)
   → vector search, top_k=10 each  Qdrant
   → RRF fusion, K=60              rank-based, not score-based
-  → cross-encoder rerank, 24 → 8  voyageai/rerank-2.5
+  → cross-encoder rerank, 24 → 8  voyageai/rerank-3-lite
 ```
 
 **Embeddings are batched.** Sub-queries were embedded one per call — four
@@ -519,8 +523,10 @@ Cases carry a **kind**, because an aggregate hides what matters:
 | `near_miss` | 8 | Retrieval keys on vocabulary, not the transaction | **0.875** |
 | `adversarial` | 8 | A euphemised prohibition never reached the model | **1.000** |
 
-Aggregate: **recall 0.985, recall@1 0.833, MRR 0.890, precision 0.733**. All 54
-standards are covered. Out-of-scope queries top out at **0.255** against a 0.35
+Aggregate with `voyageai/rerank-3-lite`: **recall 0.985, recall@1 0.818, MRR 0.883,
+precision 0.735**, from a run in which two of the 66 rerank calls failed and fell
+back to the fused order. All 54 standards are covered. Out-of-scope queries top
+out at **0.255** against a 0.35
 coverage threshold, which is what makes that threshold a usable `NEEDS_REVIEW`
 signal rather than a guess.
 
@@ -528,8 +534,9 @@ signal rather than a guess.
 suite has stopped measuring, not that the system is perfect. The adversarial and
 near-miss cases sit deliberately at the edge of what retrieval can currently do.
 
-**How the current configuration was chosen** (measured on the 22-case set, so the
-absolute numbers are a snapshot; the comparison between rows is what matters):
+**How the current configuration was chosen** (measured on the 22-case set with
+`rerank-2.5`, so the absolute numbers are a snapshot; the comparison between rows
+is what matters):
 
 | Configuration | Recall | MRR | Latency/query |
 |---|---|---|---|
@@ -682,7 +689,7 @@ All settings live in `app/config.py` and load from `.env`. See `.env.example`.
 | `RETRIEVAL_TOP_K` | `10` | Per sub-query. See note below. |
 | `RETRIEVAL_SCORE_THRESHOLD` | `0.35` | Below this, coverage is judged insufficient. |
 | `RERANK_ENABLED` | `true` | Cross-encoder reranking over the fused candidates. |
-| `RERANK_MODEL` | `voyageai/rerank-2.5` | Served via OpenRouter, so no extra key. |
+| `RERANK_MODEL` | `voyageai/rerank-3-lite` | Served via OpenRouter, so no extra key. |
 | `RERANK_CANDIDATES` | `24` | Pool size before reranking down to 8 excerpts. |
 | `LOG_PROMPTS` | `true` | Logs the resolved prompt. **Disable in production.** |
 | `LOG_LEVEL` / `LOG_FILE` | `INFO` / `logs/app.jsonl` | |
@@ -707,7 +714,7 @@ above; the pair takes recall from 0.955 to 1.000, and neither half helps alone.
 ## Testing
 
 ```bash
-pytest -q            # 185 tests, ~8s, no network, no credentials
+pytest -q            # 187 tests, ~10s, no network, no credentials
 ```
 
 The suite runs entirely offline: an in-memory vector store implements the same
@@ -728,6 +735,8 @@ the LLM is scripted. Coverage focuses on the properties that matter:
 - **Intent routing** — a greeting never reaches the embedder, store or reranker
   (they raise if called), and `"Hi, can we guarantee a fixed return?"` still gets
   a full assessment
+- **Ingest survives a stalled upload** — a batch that fails in transit is retried
+  and none is lost, and it gives up only after the last attempt
 - **Batched embeddings fall back** — a raising *or truncated* batch response
   reverts to per-sub-query calls, since a short batch would otherwise pair
   vectors with the wrong queries
@@ -774,7 +783,7 @@ scripts/               ingest.py, eval_retrieval.py, eval_verdict.py,
 DESIGN.md / .pdf       The design document and its rendered form
 tests/
   conftest.py          Redirects test logging away from logs/app.jsonl
-  test_*.py            185 tests
+  test_*.py            187 tests
 ```
 
 ---
